@@ -3,7 +3,7 @@
   "name": "WeChat Article Importer",
   "version": "0.1.0",
   "minAppVersion": "0.15.0",
-  "description": "Import WeChat public account articles into Obsidian with metadata and images.",
+  "description": "Import WeChat and Xiaohongshu content into Obsidian with metadata and media.",
   "author": "hzt",
   "isDesktopOnly": false
 }

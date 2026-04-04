@@ -22,6 +22,18 @@ interface ImportInput {
 	downloadMedia: boolean;
 }
 
+type SupportedPlatform = "wechat" | "xiaohongshu";
+
+interface ImportTarget {
+	platform: SupportedPlatform;
+	url: string;
+}
+
+interface BatchExtractResult {
+	targets: ImportTarget[];
+	invalidLines: string[];
+}
+
 interface WechatArticleData {
 	title: string;
 	description: string;
@@ -39,6 +51,17 @@ interface WechatArticleData {
 	images: string[];
 }
 
+interface XhsNoteData {
+	title: string;
+	source: string;
+	content: string;
+	images: string[];
+	videoUrl: string | null;
+	isVideo: boolean;
+	tags: string[];
+	cover: string;
+}
+
 const DEFAULT_SETTINGS: WechatImporterSettings = {
 	defaultFolder: "WeChat Articles",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
@@ -54,13 +77,13 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.addRibbonIcon("book", "导入微信公众号文章", async () => {
+		this.addRibbonIcon("book", "导入文章（微信 / 小红书）", async () => {
 			await this.handleImportAction();
 		});
 
 		this.addCommand({
-			id: "import-wechat-article",
-			name: "导入微信公众号文章",
+			id: "import-article",
+			name: "导入文章（微信 / 小红书）",
 			callback: async () => {
 				await this.handleImportAction();
 			},
@@ -83,13 +106,21 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			return;
 		}
 
-		const url = this.extractWechatUrl(input.text);
-		if (!url) {
-			new Notice("未识别到有效的微信公众号文章链接。");
+		const target = this.extractImportTarget(input.text);
+		if (!target) {
+			new Notice("未识别到有效链接。目前支持微信公众号和小红书。");
 			return;
 		}
 
-		await this.importWechatArticle(url, input.category, input.downloadMedia);
+		await this.importByPlatform(target, input.category, input.downloadMedia);
+	}
+
+	async importByPlatform(target: ImportTarget, category: string, downloadMedia: boolean) {
+		if (target.platform === "wechat") {
+			await this.importWechatArticle(target.url, category, downloadMedia);
+			return;
+		}
+		await this.importXiaohongshuNote(target.url, category, downloadMedia);
 	}
 
 	async promptForImportInput(): Promise<ImportInput | null> {
@@ -97,6 +128,20 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const modal = new WechatInputModal(this.app, this.settings, (result) => resolve(result));
 			modal.open();
 		});
+	}
+
+	extractImportTarget(input: string): ImportTarget | null {
+		const wechatUrl = this.extractWechatUrl(input);
+		if (wechatUrl) {
+			return { platform: "wechat", url: wechatUrl };
+		}
+
+		const xhsUrl = this.extractXiaohongshuUrl(input);
+		if (xhsUrl) {
+			return { platform: "xiaohongshu", url: xhsUrl };
+		}
+
+		return null;
 	}
 
 	extractWechatUrl(input: string): string | null {
@@ -111,6 +156,25 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			if (match?.[1]) {
 				return this.normalizeArticleUrl(match[1]);
 			}
+		}
+
+		return null;
+	}
+
+	extractXiaohongshuUrl(input: string): string | null {
+		const normalizedInput = input.replace(/&amp;/g, "&");
+		const patterns = [
+			/(https?:\/\/xhslink\.com\/a?o?\/[^\s，,]+)/i,
+			/(https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^\s，,]*)?)/i,
+		];
+
+		for (const pattern of patterns) {
+			const match = normalizedInput.match(pattern);
+			if (!match?.[1]) {
+				continue;
+			}
+			const url = match[1];
+			return url.replace("/explore/", "/discovery/item/");
 		}
 
 		return null;
@@ -160,9 +224,11 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			await this.ensureFolder(folderPath);
 
 			let imageMap = new Map<string, string>();
-			const mediaFolder = baseFolder ? `${baseFolder}/media` : "media";
 			const safeTitle = this.sanitizeFileName(article.title, "Untitled WeChat Article");
 			const safeMediaTitle = this.sanitizeMediaBaseName(article.title, "Untitled-WeChat-Article");
+			const mediaRootFolder = baseFolder ? `${baseFolder}/media` : "media";
+			const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
+			const relativeMediaPrefix = `../media/${safeMediaTitle}`;
 
 			if (article.images.length > 0) {
 				if (downloadMedia) {
@@ -173,7 +239,8 @@ export default class WechatArticleImporterPlugin extends Plugin {
 					downloadMedia,
 					mediaFolder,
 					safeMediaTitle,
-					articleUrl: normalizedUrl,
+					relativeMediaPrefix,
+					headers: this.buildWechatHeaders(normalizedUrl),
 				});
 			}
 
@@ -182,7 +249,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const normalizedCover = this.normalizeMediaUrl(article.cover);
 			const finalCover = normalizedCover ? (imageMap.get(normalizedCover) ?? normalizedCover) : "";
 
-			const frontmatter = this.buildFrontmatter(article, categoryName, finalCover);
+			const frontmatter = this.buildWechatFrontmatter(article, categoryName, finalCover);
 			const markdown = `${frontmatter}\n# ${article.title}\n\n${article.contentMarkdown}\n`;
 
 			const filePath = await this.getUniqueNotePath(folderPath, safeTitle);
@@ -217,6 +284,235 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		return response.text;
+	}
+
+	buildXiaohongshuHeaders(): Record<string, string> {
+		return {
+			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+			Referer: "https://www.xiaohongshu.com/",
+		};
+	}
+
+	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean) {
+		try {
+			const html = await this.fetchXiaohongshuHtml(url);
+			const note = this.extractXhsNoteData(url, html);
+			const cleanContent = note.content.trim();
+
+			const baseFolder = this.settings.defaultFolder.trim();
+			const categoryName = category.trim() || "其他";
+			const folderPath = baseFolder
+				? `${baseFolder}/${this.sanitizePathSegment(categoryName, "其他")}`
+				: this.sanitizePathSegment(categoryName, "其他");
+
+			await this.ensureFolder(folderPath);
+
+			const safeTitle = this.sanitizeFileName(note.title, "Untitled Xiaohongshu Note");
+			const safeMediaTitle = this.sanitizeMediaBaseName(note.title, "Untitled-XHS-Note");
+			const mediaRootFolder = baseFolder ? `${baseFolder}/media` : "media";
+			const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
+			const relativeMediaPrefix = `../media/${safeMediaTitle}`;
+			const headers = this.buildXiaohongshuHeaders();
+
+			if (downloadMedia && (note.images.length > 0 || note.videoUrl)) {
+				await this.ensureFolder(mediaFolder);
+			}
+
+			const imageMap = await this.buildImageMap(note.images, {
+				downloadMedia,
+				mediaFolder,
+				safeMediaTitle,
+				relativeMediaPrefix,
+				headers,
+			});
+
+			const finalImages = note.images.map((img) => imageMap.get(img) ?? img);
+			const normalizedCover = this.normalizeMediaUrl(note.cover);
+			const finalCover = normalizedCover ? (imageMap.get(normalizedCover) ?? normalizedCover) : "";
+
+			let videoMarkdown = "";
+			if (note.isVideo && note.videoUrl) {
+				let finalVideoUrl = note.videoUrl;
+				if (downloadMedia) {
+					const videoFilename = await this.downloadMediaFile(
+						note.videoUrl,
+						mediaFolder,
+						`${safeMediaTitle}-video`,
+						".mp4",
+						headers
+					);
+					if (!videoFilename.startsWith("http")) {
+						finalVideoUrl = `${relativeMediaPrefix}/${videoFilename}`;
+					}
+				}
+				videoMarkdown = `<video controls src="${finalVideoUrl}" width="100%"></video>\n\n`;
+			}
+
+			let markdownBody = "";
+			if (videoMarkdown) {
+				markdownBody += videoMarkdown;
+			} else if (finalImages.length > 0) {
+				markdownBody += `![Cover Image](${this.toMarkdownDestination(finalImages[0])})\n\n`;
+			}
+
+			if (cleanContent) {
+				markdownBody += `${cleanContent}\n\n`;
+			}
+
+			if (note.tags.length > 0) {
+				markdownBody += note.tags.map((tag) => `#${tag}`).join(" ") + "\n\n";
+			}
+
+			if (!note.isVideo && finalImages.length > 1) {
+				const restImages = finalImages
+					.slice(1)
+					.map((img) => `![Image](${this.toMarkdownDestination(img)})`)
+					.join("\n");
+				markdownBody += `${restImages}\n`;
+			}
+
+			const frontmatter = this.buildXhsFrontmatter(note, categoryName, finalCover);
+			const markdown = `${frontmatter}\n# ${note.title}\n\n${this.normalizeMarkdownSpacing(markdownBody)}\n`;
+
+			const filePath = await this.getUniqueNotePath(folderPath, safeTitle);
+			const file = await this.app.vault.create(filePath, markdown);
+			await this.app.workspace.getLeaf(true).openFile(file);
+
+			this.settings.lastCategory = categoryName;
+			await this.saveSettings();
+			new Notice(`已导入小红书内容：${filePath}`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error("Failed to import Xiaohongshu note:", error);
+			new Notice(`导入失败：${message}`);
+		}
+	}
+
+	async fetchXiaohongshuHtml(url: string): Promise<string> {
+		const response = await requestUrl({
+			url,
+			method: "GET",
+			headers: this.buildXiaohongshuHeaders(),
+			throw: false,
+		});
+
+		if (response.status >= 400) {
+			throw new Error(`请求失败（HTTP ${response.status}）`);
+		}
+
+		return response.text;
+	}
+
+	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
+		const titleMatch = html.match(/<title>(.*?)<\/title>/);
+		const title = titleMatch?.[1]?.replace(" - 小红书", "").trim() || "Untitled Xiaohongshu Note";
+		const state = this.parseXhsState(html);
+		const note = state ? this.getXhsNoteObject(state) : null;
+
+		const images = this.extractXhsImages(note);
+		const videoUrl = this.extractXhsVideoUrl(note);
+		const isVideo = note?.type === "video";
+
+		const contentFromHtml = html.match(/<div id="detail-desc" class="desc">([\s\S]*?)<\/div>/)?.[1] || "";
+		const content = this.extractXhsContent(note, contentFromHtml);
+		const tags = this.extractXhsTags(content);
+		const normalizedContent = content
+			.replace(/#[^#\s]*(?:\s+#[^#\s]*)*\s*/g, "")
+			.trim();
+
+		return {
+			title,
+			source: sourceUrl,
+			content: normalizedContent,
+			images,
+			videoUrl,
+			isVideo,
+			tags,
+			cover: images[0] || "",
+		};
+	}
+
+	parseXhsState(html: string): any | null {
+		const stateMatch = html.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/s);
+		if (!stateMatch?.[1]) {
+			return null;
+		}
+
+		try {
+			const jsonStr = stateMatch[1].trim();
+			const cleanedJson = jsonStr.replace(/undefined/g, "null");
+			return JSON.parse(cleanedJson);
+		} catch (_error) {
+			return null;
+		}
+	}
+
+	getXhsNoteObject(state: any): any | null {
+		try {
+			const map = state?.note?.noteDetailMap;
+			if (!map || typeof map !== "object") {
+				return null;
+			}
+			const noteId = Object.keys(map)[0];
+			return map[noteId]?.note ?? null;
+		} catch (_error) {
+			return null;
+		}
+	}
+
+	extractXhsImages(note: any): string[] {
+		const list = Array.isArray(note?.imageList) ? note.imageList : [];
+		return list
+			.map((img: any) => this.normalizeMediaUrl(img?.urlDefault || ""))
+			.filter((url: string) => !!url);
+	}
+
+	extractXhsVideoUrl(note: any): string | null {
+		const stream = note?.video?.media?.stream;
+		const h264 = Array.isArray(stream?.h264) ? stream.h264 : [];
+		const h265 = Array.isArray(stream?.h265) ? stream.h265 : [];
+		const picked = h264[0]?.masterUrl || h265[0]?.masterUrl || "";
+		const normalized = this.normalizeMediaUrl(picked);
+		return normalized || null;
+	}
+
+	extractXhsContent(note: any, contentFromHtml: string): string {
+		const htmlText = contentFromHtml
+			.replace(/<[^>]+>/g, "")
+			.replace(/\[话题\]/g, "")
+			.replace(/\[[^\]]+\]/g, "")
+			.trim();
+		if (htmlText) {
+			return htmlText;
+		}
+
+		const desc = (note?.desc || "")
+			.replace(/\[话题\]/g, "")
+			.replace(/\[[^\]]+\]/g, "")
+			.trim();
+		return desc;
+	}
+
+	extractXhsTags(content: string): string[] {
+		const matches = content.match(/#\S+/g) || [];
+		return matches.map((tag) => tag.replace(/^#/, "").trim()).filter((tag) => !!tag);
+	}
+
+	buildXhsFrontmatter(note: XhsNoteData, category: string, cover: string): string {
+		const importedAt = this.formatDateTime(new Date());
+		const rows = [
+			"---",
+			`platform: ${this.toYamlString("xiaohongshu")}`,
+			`title: ${this.toYamlString(note.title)}`,
+			`source: ${this.toYamlString(note.source)}`,
+			`category: ${this.toYamlString(category)}`,
+			`imported_at: ${this.toYamlString(importedAt)}`,
+			`cover: ${this.toYamlString(cover)}`,
+			`type: ${this.toYamlString(note.isVideo ? "video" : "note")}`,
+			"---",
+		];
+		return rows.join("\n");
 	}
 
 	extractWechatArticle(sourceUrl: string, html: string): WechatArticleData {
@@ -509,7 +805,13 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 	async buildImageMap(
 		imageUrls: string[],
-		options: { downloadMedia: boolean; mediaFolder: string; safeMediaTitle: string; articleUrl: string }
+		options: {
+			downloadMedia: boolean;
+			mediaFolder: string;
+			safeMediaTitle: string;
+			relativeMediaPrefix: string;
+			headers?: Record<string, string>;
+		}
 	): Promise<Map<string, string>> {
 		const map = new Map<string, string>();
 		let index = 1;
@@ -527,8 +829,8 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 			const extension = this.guessImageExtension(normalized);
 			const baseName = `${options.safeMediaTitle}-${index}`;
-			const downloaded = await this.downloadMediaFile(normalized, options.mediaFolder, baseName, extension, options.articleUrl);
-			const finalRef = downloaded.startsWith("http") ? downloaded : `../media/${downloaded}`;
+			const downloaded = await this.downloadMediaFile(normalized, options.mediaFolder, baseName, extension, options.headers);
+			const finalRef = downloaded.startsWith("http") ? downloaded : `${options.relativeMediaPrefix}/${downloaded}`;
 			map.set(normalized, finalRef);
 			index += 1;
 		}
@@ -541,7 +843,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		folderPath: string,
 		baseName: string,
 		extension: string,
-		articleUrl: string
+		headers?: Record<string, string>
 	): Promise<string> {
 		try {
 			const filename = await this.getUniqueMediaFilename(folderPath, baseName, extension);
@@ -550,7 +852,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const response = await requestUrl({
 				url,
 				method: "GET",
-				headers: this.buildWechatHeaders(articleUrl),
+				headers: headers || {},
 				throw: false,
 			});
 
@@ -615,12 +917,13 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return ".jpg";
 	}
 
-	buildFrontmatter(article: WechatArticleData, category: string, cover: string): string {
+	buildWechatFrontmatter(article: WechatArticleData, category: string, cover: string): string {
 		const importedAt = this.formatDateTime(new Date());
 		const publishedTs = article.publishedTs > 0 ? String(article.publishedTs) : "0";
 
 		const rows = [
 			"---",
+			`platform: ${this.toYamlString("wechat")}`,
 			`title: ${this.toYamlString(article.title)}`,
 			`source: ${this.toYamlString(article.source)}`,
 			`account: ${this.toYamlString(article.account)}`,
@@ -1002,10 +1305,10 @@ class WechatInputModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass("wca-modal-content");
 
-		contentEl.createEl("h2", { text: "导入微信公众号文章" });
+		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
 
 		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		inputRow.createEl("p", { text: "粘贴公众号链接或分享文本：" });
+		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本：" });
 		const input = inputRow.createEl("textarea", {
 			cls: "wca-modal-textarea",
 			attr: { placeholder: "例如：https://mp.weixin.qq.com/s/xxxxxx" },
