@@ -264,6 +264,9 @@ async function importWechatArticle(url, outputDir, category, downloadMedia) {
 async function importXiaohongshuNote(url, outputDir, category, downloadMedia) {
 	const resolvedUrl = await resolveXiaohongshuUrl(url);
 	const html = await fetchText(resolvedUrl, buildXiaohongshuHeaders());
+	if (isXhsUnavailablePage(html)) {
+		throw new Error("Xiaohongshu note is unavailable. It may be deleted, access-restricted, or require the xsec_token from the share link.");
+	}
 	const note = extractXhsNoteData(resolvedUrl, html);
 
 	const safeTitle = sanitizeFileName(note.title, "Untitled Xiaohongshu Note");
@@ -388,7 +391,17 @@ async function resolveXiaohongshuUrl(url) {
 		return normalizeXiaohongshuUrl(normalized);
 	}
 
-	const html = await fetchText(normalized, buildXiaohongshuHeaders());
+	const response = await fetch(normalized, {
+		method: "GET",
+		headers: buildXiaohongshuHeaders(),
+		redirect: "manual",
+	});
+	const location = response.headers.get("location");
+	if (location) {
+		return normalizeXiaohongshuUrl(decodeHtmlEntities(location));
+	}
+
+	const html = await response.text();
 	const match = html.match(/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i);
 	if (!match?.[0]) {
 		throw new Error("Failed to resolve Xiaohongshu short link.");
@@ -738,14 +751,22 @@ function normalizeXiaohongshuUrl(url) {
 	const normalized = normalizeArticleUrl(url);
 	try {
 		const parsed = new URL(normalized);
+		if (!/xiaohongshu\.com$/i.test(parsed.hostname)) {
+			return normalized;
+		}
 		const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/i);
 		if (!match?.[1]) {
-			return normalized.replace("/explore/", "/discovery/item/");
+			const normalizedPath = parsed.pathname.replace("/explore/", "/discovery/item/");
+			return `${parsed.origin}${normalizedPath}${parsed.search}`;
 		}
-		return `https://www.xiaohongshu.com/discovery/item/${match[1]}`;
+		return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
 	} catch (_error) {
 		return normalized.replace("/explore/", "/discovery/item/");
 	}
+}
+
+function isXhsUnavailablePage(html) {
+	return /<title>\s*小红书\s*-\s*你访问的页面不见了\s*<\/title>/i.test(html);
 }
 
 function normalizeMediaUrl(url) {
