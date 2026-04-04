@@ -1,6 +1,11 @@
-# Article Importer
+# Multi-Source Content Importer
 
-将微信公众号和小红书内容和其他平台的资源导入为结构化 Markdown，统一沉淀到知识库。
+将微信公众号和小红书内容导入为结构化 Markdown，统一沉淀到 Obsidian 知识库。
+
+这个仓库现在提供两种使用方式：
+
+- 插件：给人手动在 Obsidian 里使用
+- Skill：给 agent 直接调用同类导入能力，不依赖插件 UI
 
 ## 功能概览
 
@@ -11,10 +16,25 @@
 - 目录结构清晰：笔记按分类保存，媒体按文章名分文件夹保存
 - 写入 frontmatter 元数据，便于后续检索和自动化处理
 
+## 两种入口
+
+- 插件入口：
+  - Obsidian Ribbon 图标
+  - Obsidian 命令 `导入文章（微信 / 小红书）`
+  - 适合人工交互式选择分类、目录和媒体下载策略
+- Skill 入口：
+  - agent 直接执行 skill 自带脚本
+  - 输入一个或批量链接，直接抓取、解析并保存到指定路径
+  - 不要求 Obsidian 插件已安装或已启用
+
 ## 输出结构
 
-- 笔记：`<defaultFolder>/<category>/<title>.md`
-- 媒体：`<defaultFolder>/media/<title>/...`
+- 插件模式：
+  - 笔记：`<defaultFolder>/<category>/<title>.md`
+  - 媒体：`<defaultFolder>/media/<title>/...`
+- Skill 模式：
+  - 笔记：`<output-dir>/<title>.md`
+  - 媒体：`<output-dir>/media/<title>/...`
 
 默认 `defaultFolder` 为 `External Files`。
 
@@ -25,6 +45,37 @@
 3. 可按行粘贴多条，实现批量导入
 4. 选择分类，按需勾选“下载图片到本地”
 5. 点击导入
+
+## Agent Quick Start
+
+Skill 文件：[`skills/obsidian-content-importer/SKILL.md`](skills/obsidian-content-importer/SKILL.md)
+
+```bash
+# 1. 安装 skill（复制整个 skill 目录，而不只是 SKILL.md）
+# 在仓库根目录执行
+mkdir -p ~/.codex/skills
+cp -R skills/obsidian-content-importer ~/.codex/skills/
+
+# 2. agent 直接使用 skill，自带脚本，不依赖插件 UI
+node ~/.codex/skills/obsidian-content-importer/scripts/import-content.mjs \
+  --output-dir "/absolute/output/path" \
+  --category "研究" \
+  --url "https://mp.weixin.qq.com/s/xxxx"
+
+# 3. 批量导入
+node ~/.codex/skills/obsidian-content-importer/scripts/import-content.mjs \
+  --output-dir "/absolute/output/path" \
+  --category "研究" \
+  --download-media \
+  --input-file "/tmp/links.txt"
+
+# 4. 在 agent 中描述任务
+# "请使用 obsidian-content-importer skill，把这些链接导入到 /path/to/notes"
+```
+
+这个 skill 的职责是复用仓库里的抓取、解析、Markdown 生成与落盘逻辑，让 agent 直接完成导入任务，而不是指导 agent 去操作插件界面。
+
+脚本会输出 JSON 摘要，包含成功文件、失败链接和无效输入，便于 agent 继续汇报或后处理。
 
 ## 支持链接格式
 
@@ -40,7 +91,7 @@
 
 将构建产物放到你的 Vault 插件目录（目录名必须与 `manifest.json` 的 `id` 一致）：
 
-`<你的Vault>/.obsidian/plugins/wechat-article-importer/`
+`<你的Vault>/.obsidian/plugins/multi-source-content-importer/`
 
 目录内至少包含：
 
@@ -75,11 +126,20 @@ npm run dev
 - 推荐将当前项目目录软链到插件目录（只做一次）：
 
 ```bash
-ln -s ./all-in-obs "<你的Vault>/.obsidian/plugins/wechat-article-importer"
+ln -s "$(pwd)" "<你的Vault>/.obsidian/plugins/multi-source-content-importer"
 ```
 
 - 开发时保持 `npm run dev` 运行
 - 代码变更后，在 Obsidian 中关闭再启用该插件，或执行 `Reload app without saving`
+
+## Skill 脚本参数
+
+- `--output-dir`：必填，导出目录
+- `--url`：可重复传入多个链接
+- `--input-file`：批量链接文件，一行一个
+- `--text`：直接传入混合文本，由脚本自动抽取链接
+- `--category`：写入 frontmatter 的分类，默认 `其他`
+- `--download-media`：启用后下载图片或视频到本地 `media/`
 
 ## 设置项说明
 
@@ -90,7 +150,7 @@ ln -s ./all-in-obs "<你的Vault>/.obsidian/plugins/wechat-article-importer"
 
 ## frontmatter 字段
 
-微信文章示例字段：
+微信公众号文章示例字段：
 
 - `platform`
 - `title`

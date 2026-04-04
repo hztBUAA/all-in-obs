@@ -1,9 +1,9 @@
 {
-	"id": "wechat-article-importer",
-	"name": "WeChat Article Importer",
-	"version": "0.1.3",
+	"id": "multi-source-content-importer",
+	"name": "Multi-Source Content Importer",
+	"version": "0.1.4",
 	"minAppVersion": "0.15.0",
-	"description": "Import WeChat and Xiaohongshu content with metadata and media.",
+	"description": "Import content from WeChat and Xiaohongshu into Obsidian with metadata and media.",
 	"author": "hzt",
 	"isDesktopOnly": false
 }
