@@ -309,6 +309,34 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return normalized;
 	}
 
+	normalizeCookieString(value: string): string {
+		const cleaned = value.trim().replace(/^Cookie:\s*/i, "");
+		if (!cleaned) {
+			return "";
+		}
+
+		const segments = cleaned
+			.split(";")
+			.map((segment) => segment.trim())
+			.filter((segment) => !!segment);
+		const kvSegments = segments.filter((segment) => /^[^=\s;]+=.*/.test(segment));
+		return (kvSegments.length > 0 ? kvSegments : segments).join("; ");
+	}
+
+	extractCookieFromInput(input: string): string {
+		const raw = input.trim();
+		if (!raw) {
+			return "";
+		}
+
+		const normalized = raw.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n");
+		const headerLineMatch = normalized.match(/(?:^|\n)\s*cookie\s*:\s*([^\n\r]+)/i);
+		const quotedCurlHeaderMatch = normalized.match(/(?:^|\s)(?:-H|--header)\s+(?:"|')cookie:\s*([^"']+)(?:"|')/i);
+		const plainCurlHeaderMatch = normalized.match(/(?:^|\s)(?:-H|--header)\s+cookie:\s*([^\n\r]+?)(?=\s+-H|\s+--header|$)/i);
+		const candidate = quotedCurlHeaderMatch?.[1] || plainCurlHeaderMatch?.[1] || headerLineMatch?.[1] || normalized;
+		return this.normalizeCookieString(candidate);
+	}
+
 	buildWechatHeaders(articleUrl: string): Record<string, string> {
 		return {
 			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -414,13 +442,29 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return response.text;
 	}
 
-	buildFeishuHeaders(url: string): Record<string, string> {
+	buildFeishuHeaders(url: string, preferOriginReferer = false): Record<string, string> {
+		let referer = url;
+		let origin = "";
+		try {
+			const parsed = new URL(url);
+			origin = parsed.origin;
+			if (preferOriginReferer) {
+				referer = `${parsed.origin}/`;
+			}
+		} catch (_error) {}
+
 		const headers: Record<string, string> = {
 			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-			Referer: url,
+			"Cache-Control": "no-cache",
+			Referer: referer,
 		};
-		const sessionCookie = this.settings.feishuSessionCookie.trim();
+		if (origin) {
+			headers.Origin = origin;
+		}
+
+		const sessionCookie = this.extractCookieFromInput(this.settings.feishuSessionCookie);
 		if (sessionCookie) {
 			headers.Cookie = sessionCookie;
 		}
@@ -667,11 +711,27 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			throw new Error(`请求失败（HTTP ${response.status}）`);
 		}
 
-		if (this.isFeishuPermissionPage(response.text)) {
-			throw new Error("飞书文档不可公开访问，当前仅支持公网可获取文档。");
+		const isPermissionPage = this.isFeishuPermissionPage(response.text);
+		const hasSessionCookie = !!this.extractCookieFromInput(this.settings.feishuSessionCookie);
+		if (!isPermissionPage) {
+			return response.text;
 		}
 
-		return response.text;
+		if (hasSessionCookie) {
+			const retryResponse = await requestUrl({
+				url,
+				method: "GET",
+				headers: this.buildFeishuHeaders(url, true),
+				throw: false,
+			});
+			if (retryResponse.status < 400 && !this.isFeishuPermissionPage(retryResponse.text)) {
+				return retryResponse.text;
+			}
+
+			throw new Error("飞书仍返回登录/权限页面，Session Cookie 可能失效。请重新复制最新 cURL（包含 Cookie）后重试。");
+		}
+
+		throw new Error("飞书返回登录/权限页面。请先在浏览器打开该文档，复制包含 Cookie 的 cURL，并粘贴到设置中的飞书 Session Cookie。");
 	}
 
 	isFeishuPermissionPage(html: string): boolean {
@@ -1592,10 +1652,10 @@ class WechatImporterSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("飞书 Session Cookie（预留）")
-			.setDesc("当前优先用于后续私有权限抓取扩展；若你有可复用的 Cookie，也可用于测试更完整的飞书访问链路。")
+			.setDesc("可直接粘贴完整 Cookie，或粘贴包含 `-H 'Cookie: ...'` 的 cURL，插件会自动提取。")
 			.addTextArea((text) =>
-				text.setPlaceholder("留空即可").setValue(this.plugin.settings.feishuSessionCookie).onChange(async (value) => {
-					this.plugin.settings.feishuSessionCookie = value.trim();
+				text.setPlaceholder("例如：Cookie: session=...; other=... 或整段 cURL").setValue(this.plugin.settings.feishuSessionCookie).onChange(async (value) => {
+					this.plugin.settings.feishuSessionCookie = this.plugin.extractCookieFromInput(value);
 					await this.plugin.saveSettings();
 				})
 			);

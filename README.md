@@ -94,8 +94,15 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 - `categories`：分类列表（可在设置页维护）
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
-- `feishuSessionCookie`：飞书登录态预留字段，v1 公网文档默认不依赖
+- `feishuSessionCookie`：飞书登录态字段。支持直接粘贴 Cookie，或粘贴包含 `-H 'Cookie: ...'` 的 cURL 自动提取
 - `xhsSessionToken`：小红书登录态预留字段，建议填写完整 Cookie 字符串
+
+## 飞书私有文档测试（实验）
+
+1. 在浏览器中打开目标飞书文档并保持登录
+2. 打开开发者工具，找到该文档请求，复制为 cURL（包含 Cookie）
+3. 将整段 cURL 粘贴到插件设置中的 `feishuSessionCookie`
+4. 重新执行导入；若仍提示权限页，通常是 Cookie 失效，重新复制一次即可
 
 ## frontmatter 字段
 
@@ -122,9 +129,9 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 
 ## 已知限制
 
-- 仅支持公开可访问内容（不处理登录、验证码、权限墙）
+- 默认按公开可访问内容处理；飞书私有文档可通过实验性的 Session Cookie 方式尝试导入
 - 微信风控页（环境异常/去验证）会终止导入并提示
-- 飞书 v1 仅支持公网可访问 `wiki/docs/docx` 文档；私有权限和更复杂协作场景暂未接入
+- 飞书私有文档抓取目前仍为实验能力（依赖用户提供登录态 Cookie），稳定版后续会评估 OAuth/OpenAPI 方案
 - 小红书的 Session Token / Cookie 当前仅用于增强单条笔记抓取；“我的收藏”列表同步仍需后续专门接入
 - 平台页面结构变化可能影响解析逻辑
 
