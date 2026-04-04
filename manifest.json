@@ -1,0 +1,9 @@
+{
+  "id": "wechat-article-importer",
+  "name": "WeChat Article Importer",
+  "version": "0.1.0",
+  "minAppVersion": "0.15.0",
+  "description": "Import WeChat public account articles into Obsidian with metadata and images.",
+  "author": "hzt",
+  "isDesktopOnly": false
+}
