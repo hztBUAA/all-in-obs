@@ -23,6 +23,14 @@
 	gap: 8px;
 }
 
+.wca-custom-folder-row {
+	gap: 6px;
+}
+
+.wca-custom-folder-input {
+	width: 100%;
+}
+
 .wca-chip {
 	padding: 4px 10px;
 	border-radius: 12px;

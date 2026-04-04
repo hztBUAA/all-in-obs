@@ -1,10 +1,12 @@
 import {
+	AbstractInputSuggest,
 	App,
 	Modal,
 	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
+	TFolder,
 	requestUrl,
 } from "obsidian";
 import TurndownService from "turndown";
@@ -13,6 +15,7 @@ interface WechatImporterSettings {
 	defaultFolder: string;
 	categories: string[];
 	lastCategory: string;
+	lastCustomFolder: string;
 	downloadMedia: boolean;
 }
 
@@ -20,6 +23,8 @@ interface ImportInput {
 	text: string | null;
 	category: string;
 	downloadMedia: boolean;
+	useCustomFolder: boolean;
+	customFolderPath: string;
 }
 
 type SupportedPlatform = "wechat" | "xiaohongshu";
@@ -66,10 +71,44 @@ const DEFAULT_SETTINGS: WechatImporterSettings = {
 	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
+	lastCustomFolder: "",
 	downloadMedia: true,
 };
 
 const WECHAT_REFERER = "https://mp.weixin.qq.com/";
+const CUSTOM_FOLDER_CATEGORY = "自定义文件夹";
+
+interface ImportDestination {
+	categoryName: string;
+	folderPath: string;
+	useCustomFolder: boolean;
+	customFolderPath: string;
+}
+
+class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
+	constructor(app: App, textInputEl: HTMLInputElement) {
+		super(app, textInputEl);
+		this.limit = 200;
+	}
+
+	getSuggestions(query: string): string[] {
+		const keyword = query.trim().toLowerCase();
+		const folders = this.app.vault.getAllFolders(true).map((folder) => (folder.path ? folder.path : "/"));
+		if (!keyword) {
+			return folders;
+		}
+		return folders.filter((folder) => folder.toLowerCase().includes(keyword));
+	}
+
+	renderSuggestion(value: string, el: HTMLElement): void {
+		el.setText(value === "/" ? "/ (仓库根目录)" : value);
+	}
+
+	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
+		this.setValue(value);
+		this.close();
+	}
+}
 
 export default class WechatArticleImporterPlugin extends Plugin {
 	settings: WechatImporterSettings;
@@ -94,6 +133,8 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings.defaultFolder = this.normalizeVaultPath(this.settings.defaultFolder);
+		this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(this.settings.lastCustomFolder);
 	}
 
 	async saveSettings() {
@@ -106,6 +147,12 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			return;
 		}
 
+		if (input.useCustomFolder) {
+			this.settings.lastCategory = CUSTOM_FOLDER_CATEGORY;
+			this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(input.customFolderPath) || "/";
+			await this.saveSettings();
+		}
+
 		const batch = this.extractBatchImportTargets(input.text);
 		if (batch.targets.length === 0) {
 			new Notice("未识别到有效链接。目前支持微信公众号和小红书。");
@@ -113,7 +160,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		if (batch.targets.length === 1) {
-			await this.importByPlatform(batch.targets[0], input.category, input.downloadMedia, false);
+			await this.importByPlatform(batch.targets[0], input.category, input.downloadMedia, input.useCustomFolder, input.customFolderPath, false);
 			return;
 		}
 
@@ -124,7 +171,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		let success = 0;
 		let failed = 0;
 		for (const target of batch.targets) {
-			const ok = await this.importByPlatform(target, input.category, input.downloadMedia, true);
+			const ok = await this.importByPlatform(target, input.category, input.downloadMedia, input.useCustomFolder, input.customFolderPath, true);
 			if (ok) {
 				success += 1;
 			} else {
@@ -135,11 +182,18 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		new Notice(`批量导入完成：成功 ${success}，失败 ${failed}。`);
 	}
 
-	async importByPlatform(target: ImportTarget, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
+	async importByPlatform(
+		target: ImportTarget,
+		category: string,
+		downloadMedia: boolean,
+		useCustomFolder: boolean,
+		customFolderPath: string,
+		silent = false
+	): Promise<boolean> {
 		if (target.platform === "wechat") {
-			return await this.importWechatArticle(target.url, category, downloadMedia, silent);
+			return await this.importWechatArticle(target.url, category, downloadMedia, useCustomFolder, customFolderPath, silent);
 		}
-		return await this.importXiaohongshuNote(target.url, category, downloadMedia, silent);
+		return await this.importXiaohongshuNote(target.url, category, downloadMedia, useCustomFolder, customFolderPath, silent);
 	}
 
 	async promptForImportInput(): Promise<ImportInput | null> {
@@ -147,6 +201,81 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const modal = new WechatInputModal(this.app, this.settings, (result) => resolve(result));
 			modal.open();
 		});
+	}
+
+	normalizeVaultPath(path: string): string {
+		const normalized = path.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+		if (!normalized || /^\/+$/.test(normalized)) {
+			return "";
+		}
+		return normalized.replace(/^\/+|\/+$/g, "");
+	}
+
+	normalizeFolderDisplayPath(path: string): string {
+		const trimmed = path.trim();
+		if (!trimmed) {
+			return "";
+		}
+		if (/^[/\\]+$/.test(trimmed)) {
+			return "/";
+		}
+		const normalized = this.normalizeVaultPath(trimmed);
+		return normalized || "/";
+	}
+
+	toVaultFolderPath(displayPath: string): string {
+		if (displayPath === "/") {
+			return "";
+		}
+		return this.normalizeVaultPath(displayPath);
+	}
+
+	resolveImportDestination(category: string, useCustomFolder: boolean, customFolderPath: string): ImportDestination {
+		if (useCustomFolder) {
+			const normalizedDisplayPath = this.normalizeFolderDisplayPath(customFolderPath) || "/";
+			const folderPath = this.toVaultFolderPath(normalizedDisplayPath);
+			const categoryName = folderPath ? folderPath.split("/").filter(Boolean).pop() || "其他" : "根目录";
+			return {
+				categoryName,
+				folderPath,
+				useCustomFolder: true,
+				customFolderPath: normalizedDisplayPath,
+			};
+		}
+
+		const baseFolder = this.normalizeVaultPath(this.settings.defaultFolder);
+		const categoryName = category.trim() || "其他";
+		const safeCategory = this.sanitizePathSegment(categoryName, "其他");
+		const folderPath = baseFolder ? `${baseFolder}/${safeCategory}` : safeCategory;
+		return {
+			categoryName,
+			folderPath,
+			useCustomFolder: false,
+			customFolderPath: "",
+		};
+	}
+
+	getRelativePath(fromFolder: string, toPath: string): string {
+		const fromParts = this.normalizeVaultPath(fromFolder).split("/").filter(Boolean);
+		const toParts = this.normalizeVaultPath(toPath).split("/").filter(Boolean);
+
+		let shared = 0;
+		while (shared < fromParts.length && shared < toParts.length && fromParts[shared] === toParts[shared]) {
+			shared += 1;
+		}
+
+		const up = Array(Math.max(fromParts.length - shared, 0)).fill("..");
+		const down = toParts.slice(shared);
+		const relative = [...up, ...down];
+		return relative.length > 0 ? relative.join("/") : ".";
+	}
+
+	buildMediaLocation(folderPath: string, safeMediaTitle: string, useCustomFolder: boolean): { mediaFolder: string; relativeMediaPrefix: string } {
+		const baseFolder = this.normalizeVaultPath(this.settings.defaultFolder);
+		const mediaRootFolder = useCustomFolder ? (folderPath ? `${folderPath}/media` : "media") : baseFolder ? `${baseFolder}/media` : "media";
+		const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
+		const relativeMediaPrefix = this.getRelativePath(folderPath, mediaFolder);
+		return { mediaFolder, relativeMediaPrefix };
 	}
 
 	extractImportTarget(input: string): ImportTarget | null {
@@ -266,7 +395,14 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return /环境异常|去验证|secitptpage\/template\/verify|TCaptcha|wappoc_appmsgcaptcha/i.test(html);
 	}
 
-	async importWechatArticle(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
+	async importWechatArticle(
+		url: string,
+		category: string,
+		downloadMedia: boolean,
+		useCustomFolder: boolean,
+		customFolderPath: string,
+		silent = false
+	): Promise<boolean> {
 		try {
 			const normalizedUrl = this.normalizeArticleUrl(url);
 			const html = await this.fetchWechatHtml(normalizedUrl);
@@ -276,20 +412,16 @@ export default class WechatArticleImporterPlugin extends Plugin {
 				throw new Error("未提取到正文内容");
 			}
 
-			const baseFolder = this.settings.defaultFolder.trim();
-			const categoryName = category.trim() || "其他";
-			const folderPath = baseFolder
-				? `${baseFolder}/${this.sanitizePathSegment(categoryName, "其他")}`
-				: this.sanitizePathSegment(categoryName, "其他");
+			const destination = this.resolveImportDestination(category, useCustomFolder, customFolderPath);
+			const categoryName = destination.categoryName;
+			const folderPath = destination.folderPath;
 
 			await this.ensureFolder(folderPath);
 
 			let imageMap = new Map<string, string>();
 			const safeTitle = this.sanitizeFileName(article.title, "Untitled WeChat Article");
 			const safeMediaTitle = this.sanitizeMediaBaseName(article.title, "Untitled-WeChat-Article");
-			const mediaRootFolder = baseFolder ? `${baseFolder}/media` : "media";
-			const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
-			const relativeMediaPrefix = `../media/${safeMediaTitle}`;
+			const { mediaFolder, relativeMediaPrefix } = this.buildMediaLocation(folderPath, safeMediaTitle, destination.useCustomFolder);
 
 			if (article.images.length > 0) {
 				if (downloadMedia) {
@@ -317,7 +449,10 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const file = await this.app.vault.create(filePath, markdown);
 			await this.app.workspace.getLeaf(true).openFile(file);
 
-			this.settings.lastCategory = categoryName;
+			this.settings.lastCategory = category;
+			if (destination.useCustomFolder) {
+				this.settings.lastCustomFolder = destination.customFolderPath;
+			}
 			await this.saveSettings();
 
 			if (!silent) {
@@ -361,26 +496,29 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		};
 	}
 
-	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
+	async importXiaohongshuNote(
+		url: string,
+		category: string,
+		downloadMedia: boolean,
+		useCustomFolder: boolean,
+		customFolderPath: string,
+		silent = false
+	): Promise<boolean> {
 		try {
 			const resolvedUrl = await this.resolveXiaohongshuUrl(url);
 			const html = await this.fetchXiaohongshuHtml(resolvedUrl);
 			const note = this.extractXhsNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
 
-			const baseFolder = this.settings.defaultFolder.trim();
-			const categoryName = category.trim() || "其他";
-			const folderPath = baseFolder
-				? `${baseFolder}/${this.sanitizePathSegment(categoryName, "其他")}`
-				: this.sanitizePathSegment(categoryName, "其他");
+			const destination = this.resolveImportDestination(category, useCustomFolder, customFolderPath);
+			const categoryName = destination.categoryName;
+			const folderPath = destination.folderPath;
 
 			await this.ensureFolder(folderPath);
 
 			const safeTitle = this.sanitizeFileName(note.title, "Untitled Xiaohongshu Note");
 			const safeMediaTitle = this.sanitizeMediaBaseName(note.title, "Untitled-XHS-Note");
-			const mediaRootFolder = baseFolder ? `${baseFolder}/media` : "media";
-			const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
-			const relativeMediaPrefix = `../media/${safeMediaTitle}`;
+			const { mediaFolder, relativeMediaPrefix } = this.buildMediaLocation(folderPath, safeMediaTitle, destination.useCustomFolder);
 			const headers = this.buildXiaohongshuHeaders();
 
 			if (downloadMedia && (note.images.length > 0 || note.videoUrl)) {
@@ -447,7 +585,10 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			const file = await this.app.vault.create(filePath, markdown);
 			await this.app.workspace.getLeaf(true).openFile(file);
 
-			this.settings.lastCategory = categoryName;
+			this.settings.lastCategory = category;
+			if (destination.useCustomFolder) {
+				this.settings.lastCustomFolder = destination.customFolderPath;
+			}
 			await this.saveSettings();
 			if (!silent) {
 				new Notice(`已导入小红书内容：${filePath}`);
@@ -1146,7 +1287,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		let index = 0;
 		while (true) {
 			const suffix = index === 0 ? "" : `-${index}`;
-			const filePath = `${folderPath}/${baseName}${suffix}.md`;
+			const filePath = folderPath ? `${folderPath}/${baseName}${suffix}.md` : `${baseName}${suffix}.md`;
 			if (!(await this.app.vault.adapter.exists(filePath))) {
 				return filePath;
 			}
@@ -1285,7 +1426,7 @@ class WechatImporterSettingTab extends PluginSettingTab {
 					.setPlaceholder("External Files")
 					.setValue(this.plugin.settings.defaultFolder)
 					.onChange(async (value) => {
-						this.plugin.settings.defaultFolder = value.trim();
+						this.plugin.settings.defaultFolder = this.plugin.normalizeVaultPath(value);
 						await this.plugin.saveSettings();
 					})
 			);
@@ -1301,7 +1442,7 @@ class WechatImporterSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl).setName("分类管理").setHeading();
-		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”。" });
+		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });
 
 		this.plugin.settings.categories.forEach((category, index) => {
 			const setting = new Setting(containerEl)
@@ -1378,6 +1519,7 @@ class WechatInputModal extends Modal {
 	settings: WechatImporterSettings;
 	selectedCategory: string;
 	downloadMedia: boolean;
+	customFolderPath: string;
 
 	constructor(app: App, settings: WechatImporterSettings, onSubmit: (result: ImportInput | null) => void) {
 		super(app);
@@ -1385,16 +1527,33 @@ class WechatInputModal extends Modal {
 		this.onSubmit = onSubmit;
 		this.selectedCategory = this.resolveInitialCategory();
 		this.downloadMedia = this.settings.downloadMedia;
+		this.customFolderPath = this.settings.lastCustomFolder || this.settings.defaultFolder || "";
 	}
 
 	resolveInitialCategory(): string {
 		if (this.settings.lastCategory === "其他") {
 			return "其他";
 		}
+		if (this.settings.lastCategory === CUSTOM_FOLDER_CATEGORY && this.settings.lastCustomFolder) {
+			return CUSTOM_FOLDER_CATEGORY;
+		}
 		if (this.settings.lastCategory && this.settings.categories.includes(this.settings.lastCategory)) {
 			return this.settings.lastCategory;
 		}
 		return this.settings.categories[0] || "其他";
+	}
+
+	normalizeCustomFolderInput(path: string): string | null {
+		const trimmed = path.trim();
+		if (!trimmed) {
+			return null;
+		}
+		const normalized = trimmed.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+		if (/^\/+$/.test(normalized)) {
+			return "/";
+		}
+		const cleaned = normalized.replace(/^\/+|\/+$/g, "");
+		return cleaned || null;
 	}
 
 	onOpen() {
@@ -1416,8 +1575,25 @@ class WechatInputModal extends Modal {
 		const categoryRow = contentEl.createEl("div", { cls: "wca-modal-row" });
 		categoryRow.createEl("p", { text: "选择分类：" });
 		const chipContainer = categoryRow.createEl("div", { cls: "wca-chip-container" });
+		const customFolderRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-custom-folder-row"] });
+		customFolderRow.createEl("p", { text: "自定义文件夹：" });
+		const customFolderInput = customFolderRow.createEl("input", {
+			cls: "wca-custom-folder-input",
+			attr: {
+				type: "text",
+				placeholder: "例如：Projects/Clippings（输入 / 表示仓库根目录）",
+			},
+		});
+		customFolderInput.value = this.customFolderPath;
+		customFolderInput.addEventListener("input", () => {
+			this.customFolderPath = customFolderInput.value;
+		});
+		new VaultFolderPathSuggest(this.app, customFolderInput);
 
-		const categoryList = [...this.settings.categories, "其他"];
+		const categoryList = [...this.settings.categories, "其他", CUSTOM_FOLDER_CATEGORY];
+		const updateCustomFolderRow = () => {
+			customFolderRow.style.display = this.selectedCategory === CUSTOM_FOLDER_CATEGORY ? "flex" : "none";
+		};
 		const renderChips = () => {
 			chipContainer.empty();
 			categoryList.forEach((category) => {
@@ -1431,10 +1607,12 @@ class WechatInputModal extends Modal {
 				chip.addEventListener("click", () => {
 					this.selectedCategory = category;
 					renderChips();
+					updateCustomFolderRow();
 				});
 			});
 		};
 		renderChips();
+		updateCustomFolderRow();
 
 		const downloadRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-download-row"] });
 		const downloadWrap = downloadRow.createEl("div", { cls: "wca-download-wrapper" });
@@ -1457,10 +1635,29 @@ class WechatInputModal extends Modal {
 		});
 
 		const submit = () => {
+			const useCustomFolder = this.selectedCategory === CUSTOM_FOLDER_CATEGORY;
+			let customFolderPath = "";
+			if (useCustomFolder) {
+				const normalizedPath = this.normalizeCustomFolderInput(this.customFolderPath);
+				if (!normalizedPath) {
+					new Notice("请选择自定义文件夹路径。");
+					return;
+				}
+				const vaultPath = normalizedPath === "/" ? "" : normalizedPath;
+				const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
+				if (abstractFile && !(abstractFile instanceof TFolder)) {
+					new Notice("该路径是文件，请改为文件夹路径。");
+					return;
+				}
+				customFolderPath = normalizedPath;
+			}
+
 			this.result = {
 				text: input.value.trim(),
 				category: this.selectedCategory,
 				downloadMedia: this.downloadMedia,
+				useCustomFolder,
+				customFolderPath,
 			};
 			this.close();
 		};
