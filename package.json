@@ -1,6 +1,6 @@
 {
   "name": "wechat-article-importer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Import WeChat and Xiaohongshu content with metadata and media.",
   "main": "main.js",
   "scripts": {

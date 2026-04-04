@@ -63,7 +63,7 @@ interface XhsNoteData {
 }
 
 const DEFAULT_SETTINGS: WechatImporterSettings = {
-	defaultFolder: "WeChat Articles",
+	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
 	downloadMedia: true,
@@ -1282,7 +1282,7 @@ class WechatImporterSettingTab extends PluginSettingTab {
 			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
 			.addText((text) =>
 				text
-					.setPlaceholder("WeChat Articles")
+					.setPlaceholder("External Files")
 					.setValue(this.plugin.settings.defaultFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.defaultFolder = value.trim();

@@ -16,7 +16,7 @@
 - 笔记：`<defaultFolder>/<category>/<title>.md`
 - 媒体：`<defaultFolder>/media/<title>/...`
 
-默认 `defaultFolder` 为 `WeChat Articles`。
+默认 `defaultFolder` 为 `External Files`。
 
 ## 快速使用
 
