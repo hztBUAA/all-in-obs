@@ -14,6 +14,7 @@ interface WechatImporterSettings {
 	categories: string[];
 	lastCategory: string;
 	downloadMedia: boolean;
+	feishuSessionCookie: string;
 }
 
 interface ImportInput {
@@ -22,7 +23,7 @@ interface ImportInput {
 	downloadMedia: boolean;
 }
 
-type SupportedPlatform = "wechat" | "xiaohongshu";
+type SupportedPlatform = "wechat" | "xiaohongshu" | "feishu";
 
 interface ImportTarget {
 	platform: SupportedPlatform;
@@ -62,11 +63,23 @@ interface XhsNoteData {
 	cover: string;
 }
 
+interface FeishuDocData {
+	title: string;
+	source: string;
+	docToken: string;
+	docType: "docs" | "docx" | "wiki";
+	description: string;
+	contentHtml: string;
+	contentMarkdown: string;
+	images: string[];
+}
+
 const DEFAULT_SETTINGS: WechatImporterSettings = {
 	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
 	downloadMedia: true,
+	feishuSessionCookie: "",
 };
 
 const WECHAT_REFERER = "https://mp.weixin.qq.com/";
@@ -77,13 +90,13 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.addRibbonIcon("book", "导入文章（微信 / 小红书）", async () => {
+		this.addRibbonIcon("book", "导入内容（微信 / 小红书 / 飞书）", async () => {
 			await this.handleImportAction();
 		});
 
 		this.addCommand({
 			id: "import-article",
-			name: "导入文章（微信 / 小红书）",
+			name: "导入内容（微信 / 小红书 / 飞书）",
 			callback: async () => {
 				await this.handleImportAction();
 			},
@@ -108,7 +121,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 		const batch = this.extractBatchImportTargets(input.text);
 		if (batch.targets.length === 0) {
-			new Notice("未识别到有效链接。目前支持微信公众号和小红书。");
+			new Notice("未识别到有效链接。目前支持微信公众号、小红书和飞书文档。");
 			return;
 		}
 
@@ -139,6 +152,9 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		if (target.platform === "wechat") {
 			return await this.importWechatArticle(target.url, category, downloadMedia, silent);
 		}
+		if (target.platform === "feishu") {
+			return await this.importFeishuDoc(target.url, category, downloadMedia, silent);
+		}
 		return await this.importXiaohongshuNote(target.url, category, downloadMedia, silent);
 	}
 
@@ -158,6 +174,11 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		const xhsUrl = this.extractXiaohongshuUrl(input);
 		if (xhsUrl) {
 			return { platform: "xiaohongshu", url: xhsUrl };
+		}
+
+		const feishuUrl = this.extractFeishuUrl(input);
+		if (feishuUrl) {
+			return { platform: "feishu", url: feishuUrl };
 		}
 
 		return null;
@@ -220,6 +241,44 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		return null;
+	}
+
+	extractFeishuUrl(input: string): string | null {
+		const normalizedInput = input.replace(/&amp;/g, "&");
+		const pattern =
+			/(https?:\/\/[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)\/(?:wiki|docs|docx)\/[a-zA-Z0-9]+(?:\?[^\s，,]*)?)/i;
+		const match = normalizedInput.match(pattern);
+		return match?.[1] ? this.normalizeFeishuUrl(match[1]) : null;
+	}
+
+	normalizeFeishuUrl(url: string): string {
+		const normalized = this.normalizeArticleUrl(url);
+		try {
+			const parsed = new URL(normalized);
+			const token = this.extractFeishuDocToken(normalized);
+			if (!token) {
+				return normalized;
+			}
+
+			const docType = parsed.pathname.includes("/wiki/")
+				? "wiki"
+				: parsed.pathname.includes("/docx/")
+					? "docx"
+					: "docs";
+			return `${parsed.origin}/${docType}/${token}`;
+		} catch (_error) {
+			return normalized;
+		}
+	}
+
+	extractFeishuDocToken(url: string): string {
+		try {
+			const parsed = new URL(url);
+			const match = parsed.pathname.match(/\/(?:wiki|docs|docx)\/([a-zA-Z0-9]+)/i);
+			return match?.[1] ?? "";
+		} catch (_error) {
+			return "";
+		}
 	}
 
 	normalizeXiaohongshuUrl(url: string): string {
@@ -351,6 +410,94 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		return response.text;
+	}
+
+	buildFeishuHeaders(url: string): Record<string, string> {
+		const headers: Record<string, string> = {
+			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+			Referer: url,
+		};
+		const sessionCookie = this.settings.feishuSessionCookie.trim();
+		if (sessionCookie) {
+			headers.Cookie = sessionCookie;
+		}
+		return headers;
+	}
+
+	async importFeishuDoc(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
+		try {
+			const normalizedUrl = this.normalizeFeishuUrl(url);
+			const html = await this.fetchFeishuHtml(normalizedUrl);
+			const doc = this.extractFeishuDocData(normalizedUrl, html);
+			if (!doc.contentHtml.trim()) {
+				throw new Error("未提取到飞书文档正文");
+			}
+
+			const existingFile = await this.findMarkdownFileByFrontmatter("feishu_doc_token", doc.docToken);
+			const baseFolder = this.settings.defaultFolder.trim();
+			const categoryName = existingFile?.parent?.name || category.trim() || "其他";
+			const folderPath = baseFolder
+				? `${baseFolder}/${this.sanitizePathSegment(categoryName, "其他")}`
+				: this.sanitizePathSegment(categoryName, "其他");
+
+			if (!existingFile) {
+				await this.ensureFolder(folderPath);
+			}
+
+			let imageMap = new Map<string, string>();
+			const safeTitle = this.sanitizeFileName(doc.title, "Untitled Feishu Doc");
+			const safeMediaTitle = this.sanitizeMediaBaseName(doc.title, "Untitled-Feishu-Doc");
+			const mediaRootFolder = baseFolder ? `${baseFolder}/media` : "media";
+			const mediaFolder = `${mediaRootFolder}/${safeMediaTitle}`;
+			const relativeMediaPrefix = `../media/${safeMediaTitle}`;
+
+			if (doc.images.length > 0) {
+				if (downloadMedia) {
+					await this.ensureFolder(mediaFolder);
+				}
+				imageMap = await this.buildImageMap(doc.images, {
+					downloadMedia,
+					mediaFolder,
+					safeMediaTitle,
+					relativeMediaPrefix,
+					headers: this.buildFeishuHeaders(normalizedUrl),
+				});
+			}
+
+			doc.contentMarkdown = this.convertHtmlToMarkdown(doc.contentHtml, imageMap);
+			const frontmatter = this.buildFeishuFrontmatter(doc, categoryName);
+			const markdown = `${frontmatter}\n# ${doc.title}\n\n${doc.contentMarkdown}\n`;
+
+			let filePath = "";
+			let fileToOpen = existingFile;
+			if (existingFile) {
+				await this.app.vault.modify(existingFile, markdown);
+				filePath = existingFile.path;
+			} else {
+				filePath = await this.getUniqueNotePath(folderPath, safeTitle);
+				fileToOpen = await this.app.vault.create(filePath, markdown);
+			}
+
+			if (fileToOpen) {
+				await this.app.workspace.getLeaf(true).openFile(fileToOpen);
+			}
+
+			this.settings.lastCategory = categoryName;
+			await this.saveSettings();
+			if (!silent) {
+				const verb = existingFile ? "已更新飞书文档" : "已导入飞书文档";
+				new Notice(`${verb}：${filePath}`);
+			}
+			return true;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			console.error("Failed to import Feishu doc:", error);
+			if (!silent) {
+				new Notice(`导入失败：${message}`);
+			}
+			return false;
+		}
 	}
 
 	buildXiaohongshuHeaders(): Record<string, string> {
@@ -501,6 +648,109 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
 	}
 
+	async fetchFeishuHtml(url: string): Promise<string> {
+		const response = await requestUrl({
+			url,
+			method: "GET",
+			headers: this.buildFeishuHeaders(url),
+			throw: false,
+		});
+
+		if (response.status >= 400) {
+			throw new Error(`请求失败（HTTP ${response.status}）`);
+		}
+
+		if (this.isFeishuPermissionPage(response.text)) {
+			throw new Error("飞书文档不可公开访问，当前仅支持公网可获取文档。");
+		}
+
+		return response.text;
+	}
+
+	isFeishuPermissionPage(html: string): boolean {
+		return (
+			/无权限访问|申请权限|权限不足|文档不存在|页面不存在|登录后查看|继续访问飞书/i.test(html) ||
+			/<meta[^>]+name=["']suite-passport-compile-at["']/i.test(html) ||
+			/window\.serverInjectRes\s*=|window\.passportSettings\s*=|accounts\/page\/login|suite\/passport/i.test(html)
+		);
+	}
+
+	extractFeishuDocData(sourceUrl: string, html: string): FeishuDocData {
+		const docToken = this.extractFeishuDocToken(sourceUrl);
+		const docType = sourceUrl.includes("/wiki/") ? "wiki" : sourceUrl.includes("/docx/") ? "docx" : "docs";
+		const title = this.pickFirst([
+			this.extractMetaContent(html, "property", "og:title"),
+			this.extractMetaContent(html, "name", "twitter:title"),
+			this.extractFeishuTitleTag(html),
+		]) || `Untitled Feishu Doc ${docToken}`;
+		const description = this.pickFirst([
+			this.extractMetaContent(html, "name", "description"),
+			this.extractMetaContent(html, "property", "og:description"),
+		]);
+		const contentHtml = this.extractFeishuContentHtml(html);
+		const images = this.extractImageUrlsFromContent(contentHtml, "");
+
+		return {
+			title: this.cleanText(title),
+			source: sourceUrl,
+			docToken,
+			docType,
+			description: this.cleanText(description),
+			contentHtml,
+			contentMarkdown: "",
+			images,
+		};
+	}
+
+	extractFeishuTitleTag(html: string): string {
+		const match = html.match(/<title>([\s\S]*?)<\/title>/i);
+		if (!match?.[1]) {
+			return "";
+		}
+		return this.decodeHtmlEntities(match[1])
+			.replace(/\s*-\s*飞书云文档\s*$/, "")
+			.replace(/\s*-\s*飞书\s*$/, "")
+			.trim();
+	}
+
+	extractFeishuContentHtml(html: string): string {
+		try {
+			const doc = new DOMParser().parseFromString(html, "text/html");
+			const selectors = [
+				"main",
+				"[role='main']",
+				"article",
+				".docx-container",
+				".docx-viewer-container",
+				".lark-doc-content",
+				".lark-editor",
+				".op-wiki-page-content",
+				".docs-container",
+				".doc-content",
+			];
+
+			let bestHtml = "";
+			let bestScore = 0;
+			for (const selector of selectors) {
+				doc.querySelectorAll(selector).forEach((node) => {
+					const cleaned = node.cloneNode(true) as HTMLElement;
+					cleaned.querySelectorAll("script, style, noscript, iframe, svg, nav, header, footer, aside, button").forEach((el) => el.remove());
+					const textLength = (cleaned.textContent || "").replace(/\s+/g, " ").trim().length;
+					const imageCount = cleaned.querySelectorAll("img").length;
+					const score = textLength + imageCount * 80;
+					if (score > bestScore) {
+						bestScore = score;
+						bestHtml = cleaned.innerHTML || cleaned.outerHTML;
+					}
+				});
+			}
+
+			return bestScore >= 80 ? bestHtml : "";
+		} catch (_error) {
+			return "";
+		}
+	}
+
 	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
 		const titleMatch = html.match(/<title>(.*?)<\/title>/);
 		const title = titleMatch?.[1]?.replace(" - 小红书", "").trim() || "Untitled Xiaohongshu Note";
@@ -607,6 +857,25 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			`imported_at: ${this.toYamlString(importedAt)}`,
 			`cover: ${this.toYamlString(cover)}`,
 			`type: ${this.toYamlString(note.isVideo ? "video" : "note")}`,
+			"---",
+		];
+		return rows.join("\n");
+	}
+
+	buildFeishuFrontmatter(doc: FeishuDocData, category: string): string {
+		const importedAt = this.formatDateTime(new Date());
+		const rows = [
+			"---",
+			`platform: ${this.toYamlString("feishu")}`,
+			`title: ${this.toYamlString(doc.title)}`,
+			`source: ${this.toYamlString(doc.source)}`,
+			`feishu_doc_token: ${this.toYamlString(doc.docToken)}`,
+			`feishu_doc_type: ${this.toYamlString(doc.docType)}`,
+			`access_mode: ${this.toYamlString("public")}`,
+			`imported_at: ${this.toYamlString(importedAt)}`,
+			`category: ${this.toYamlString(category)}`,
+			`description: ${this.toYamlString(doc.description)}`,
+			"type: \"doc\"",
 			"---",
 		];
 		return rows.join("\n");
@@ -1154,6 +1423,20 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 	}
 
+	async findMarkdownFileByFrontmatter(field: string, value: string) {
+		const files = this.app.vault.getMarkdownFiles();
+		const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		const pattern = new RegExp(`^${field}:\\s*"?${escapedValue}"?$`, "m");
+		for (const file of files) {
+			const content = await this.app.vault.cachedRead(file);
+			const frontmatter = content.match(/^---\n([\s\S]*?)\n---/);
+			if (frontmatter?.[1] && pattern.test(frontmatter[1])) {
+				return file;
+			}
+		}
+		return null;
+	}
+
 	normalizeMediaUrl(url: string): string {
 		if (!url) {
 			return "";
@@ -1300,6 +1583,16 @@ class WechatImporterSettingTab extends PluginSettingTab {
 				})
 			);
 
+		new Setting(containerEl)
+			.setName("飞书 Session Cookie（预留）")
+			.setDesc("v1 仅支持公网可访问飞书文档；此字段暂为后续更高权限抓取预留。")
+			.addTextArea((text) =>
+				text.setPlaceholder("留空即可").setValue(this.plugin.settings.feishuSessionCookie).onChange(async (value) => {
+					this.plugin.settings.feishuSessionCookie = value.trim();
+					await this.plugin.saveSettings();
+				})
+			);
+
 		new Setting(containerEl).setName("分类管理").setHeading();
 		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”。" });
 
@@ -1402,14 +1695,15 @@ class WechatInputModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass("wca-modal-content");
 
-		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
+		contentEl.createEl("h2", { text: "导入内容（微信 / 小红书 / 飞书）" });
 
 		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本（支持按行批量导入）：" });
+		inputRow.createEl("p", { text: "粘贴微信、小红书或飞书链接 / 分享文本（支持按行批量导入）：" });
 		const input = inputRow.createEl("textarea", {
 			cls: "wca-modal-textarea",
 			attr: {
-				placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
+				placeholder:
+					"例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx\\nhttps://xxx.feishu.cn/wiki/xxxxxxxx",
 			},
 		});
 
