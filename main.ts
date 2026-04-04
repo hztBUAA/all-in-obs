@@ -15,6 +15,7 @@ interface WechatImporterSettings {
 	lastCategory: string;
 	downloadMedia: boolean;
 	feishuSessionCookie: string;
+	xhsSessionToken: string;
 }
 
 interface ImportInput {
@@ -80,6 +81,7 @@ const DEFAULT_SETTINGS: WechatImporterSettings = {
 	lastCategory: "",
 	downloadMedia: true,
 	feishuSessionCookie: "",
+	xhsSessionToken: "",
 };
 
 const WECHAT_REFERER = "https://mp.weixin.qq.com/";
@@ -501,11 +503,16 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	}
 
 	buildXiaohongshuHeaders(): Record<string, string> {
-		return {
+		const headers: Record<string, string> = {
 			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 			Referer: "https://www.xiaohongshu.com/",
 		};
+		const sessionToken = this.settings.xhsSessionToken.trim();
+		if (sessionToken) {
+			headers.Cookie = sessionToken;
+		}
+		return headers;
 	}
 
 	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
@@ -1585,10 +1592,20 @@ class WechatImporterSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("飞书 Session Cookie（预留）")
-			.setDesc("v1 仅支持公网可访问飞书文档；此字段暂为后续更高权限抓取预留。")
+			.setDesc("当前优先用于后续私有权限抓取扩展；若你有可复用的 Cookie，也可用于测试更完整的飞书访问链路。")
 			.addTextArea((text) =>
 				text.setPlaceholder("留空即可").setValue(this.plugin.settings.feishuSessionCookie).onChange(async (value) => {
 					this.plugin.settings.feishuSessionCookie = value.trim();
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("小红书 Session Token / Cookie（预留）")
+			.setDesc("建议粘贴浏览器中的完整 Cookie 字符串。当前仅用于增强单篇笔记抓取，不包含收藏列表同步。")
+			.addTextArea((text) =>
+				text.setPlaceholder("例如：web_session=...; a1=...").setValue(this.plugin.settings.xhsSessionToken).onChange(async (value) => {
+					this.plugin.settings.xhsSessionToken = value.trim();
 					await this.plugin.saveSettings();
 				})
 			);

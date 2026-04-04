@@ -95,6 +95,7 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
 - `feishuSessionCookie`：飞书登录态预留字段，v1 公网文档默认不依赖
+- `xhsSessionToken`：小红书登录态预留字段，建议填写完整 Cookie 字符串
 
 ## frontmatter 字段
 
@@ -124,6 +125,7 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 - 仅支持公开可访问内容（不处理登录、验证码、权限墙）
 - 微信风控页（环境异常/去验证）会终止导入并提示
 - 飞书 v1 仅支持公网可访问 `wiki/docs/docx` 文档；私有权限和更复杂协作场景暂未接入
+- 小红书的 Session Token / Cookie 当前仅用于增强单条笔记抓取；“我的收藏”列表同步仍需后续专门接入
 - 平台页面结构变化可能影响解析逻辑
 
 ## 发布说明
