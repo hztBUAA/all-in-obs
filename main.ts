@@ -106,21 +106,40 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			return;
 		}
 
-		const target = this.extractImportTarget(input.text);
-		if (!target) {
+		const batch = this.extractBatchImportTargets(input.text);
+		if (batch.targets.length === 0) {
 			new Notice("未识别到有效链接。目前支持微信公众号和小红书。");
 			return;
 		}
 
-		await this.importByPlatform(target, input.category, input.downloadMedia);
-	}
-
-	async importByPlatform(target: ImportTarget, category: string, downloadMedia: boolean) {
-		if (target.platform === "wechat") {
-			await this.importWechatArticle(target.url, category, downloadMedia);
+		if (batch.targets.length === 1) {
+			await this.importByPlatform(batch.targets[0], input.category, input.downloadMedia, false);
 			return;
 		}
-		await this.importXiaohongshuNote(target.url, category, downloadMedia);
+
+		if (batch.invalidLines.length > 0) {
+			new Notice(`检测到 ${batch.invalidLines.length} 行无效输入，已自动跳过。`);
+		}
+
+		let success = 0;
+		let failed = 0;
+		for (const target of batch.targets) {
+			const ok = await this.importByPlatform(target, input.category, input.downloadMedia, true);
+			if (ok) {
+				success += 1;
+			} else {
+				failed += 1;
+			}
+		}
+
+		new Notice(`批量导入完成：成功 ${success}，失败 ${failed}。`);
+	}
+
+	async importByPlatform(target: ImportTarget, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
+		if (target.platform === "wechat") {
+			return await this.importWechatArticle(target.url, category, downloadMedia, silent);
+		}
+		return await this.importXiaohongshuNote(target.url, category, downloadMedia, silent);
 	}
 
 	async promptForImportInput(): Promise<ImportInput | null> {
@@ -142,6 +161,29 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		return null;
+	}
+
+	extractBatchImportTargets(text: string): BatchExtractResult {
+		const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => !!line);
+		const targets: ImportTarget[] = [];
+		const invalidLines: string[] = [];
+		const seen = new Set<string>();
+
+		for (const line of lines) {
+			const target = this.extractImportTarget(line);
+			if (!target) {
+				invalidLines.push(line);
+				continue;
+			}
+			const key = `${target.platform}:${target.url}`;
+			if (seen.has(key)) {
+				continue;
+			}
+			seen.add(key);
+			targets.push(target);
+		}
+
+		return { targets, invalidLines };
 	}
 
 	extractWechatUrl(input: string): string | null {
@@ -205,7 +247,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return /环境异常|去验证|secitptpage\/template\/verify|TCaptcha|wappoc_appmsgcaptcha/i.test(html);
 	}
 
-	async importWechatArticle(url: string, category: string, downloadMedia: boolean) {
+	async importWechatArticle(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
 		try {
 			const normalizedUrl = this.normalizeArticleUrl(url);
 			const html = await this.fetchWechatHtml(normalizedUrl);
@@ -259,11 +301,17 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			this.settings.lastCategory = categoryName;
 			await this.saveSettings();
 
-			new Notice(`已导入公众号文章：${filePath}`);
+			if (!silent) {
+				new Notice(`已导入公众号文章：${filePath}`);
+			}
+			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			console.error("Failed to import WeChat article:", error);
-			new Notice(`导入失败：${message}`);
+			if (!silent) {
+				new Notice(`导入失败：${message}`);
+			}
+			return false;
 		}
 	}
 
@@ -294,7 +342,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		};
 	}
 
-	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean) {
+	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
 		try {
 			const html = await this.fetchXiaohongshuHtml(url);
 			const note = this.extractXhsNoteData(url, html);
@@ -381,11 +429,17 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 			this.settings.lastCategory = categoryName;
 			await this.saveSettings();
-			new Notice(`已导入小红书内容：${filePath}`);
+			if (!silent) {
+				new Notice(`已导入小红书内容：${filePath}`);
+			}
+			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			console.error("Failed to import Xiaohongshu note:", error);
-			new Notice(`导入失败：${message}`);
+			if (!silent) {
+				new Notice(`导入失败：${message}`);
+			}
+			return false;
 		}
 	}
 
@@ -1308,10 +1362,12 @@ class WechatInputModal extends Modal {
 		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
 
 		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本：" });
+		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本（支持按行批量导入）：" });
 		const input = inputRow.createEl("textarea", {
 			cls: "wca-modal-textarea",
-			attr: { placeholder: "例如：https://mp.weixin.qq.com/s/xxxxxx" },
+			attr: {
+				placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
+			},
 		});
 
 		const categoryRow = contentEl.createEl("div", { cls: "wca-modal-row" });
