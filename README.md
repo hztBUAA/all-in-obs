@@ -17,3 +17,7 @@
 npm install
 npm run build
 ```
+
+## Acknowledgements
+
+- 感谢开源项目 `xiaohongshu-importer` 提供的实现思路与交互设计参考。
