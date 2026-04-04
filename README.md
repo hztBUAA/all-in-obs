@@ -75,7 +75,7 @@ npm run dev
 - 推荐将当前项目目录软链到插件目录（只做一次）：
 
 ```bash
-ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-importer"
+ln -s ./all-in-obs "<你的Vault>/.obsidian/plugins/wechat-article-importer"
 ```
 
 - 开发时保持 `npm run dev` 运行
