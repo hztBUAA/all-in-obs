@@ -1,6 +1,6 @@
-# WeChat Article Importer
+# Article Importer
 
-将微信公众号和小红书内容导入为结构化 Markdown，统一沉淀到知识库。
+将微信公众号和小红书内容和其他平台的资源导入为结构化 Markdown，统一沉淀到知识库。
 
 ## 功能概览
 
