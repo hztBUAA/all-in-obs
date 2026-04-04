@@ -284,6 +284,21 @@ node ~/.claude/skills/obsidian-content-importer/scripts/import-content.mjs --hel
 - 微信风控页会终止导入并提示
 - 平台页面结构变化可能影响解析逻辑
 
+## Changelog
+
+### 0.1.5
+
+- 修复小红书 `xhslink` 短链解析不稳定的问题，优先保留跳转后的分享参数，避免丢失 `xsec_token`
+- 增强小红书短链解析 fallback，补充 Node `http/https` 请求链路，降低 Obsidian 运行时网络差异带来的失败率
+- 遇到“小红书 - 你访问的页面不见了”时直接报错并停止导入，不再生成空白笔记
+- 修复部分视频笔记因分享参数被裁剪而无法提取正文、封面和视频链接的问题
+- 同步更新 agent skill 脚本的小红书短链与失效页处理逻辑
+
+### 0.1.4
+
+- 新增给 agent 直接调用的 `obsidian-content-importer` skill
+- 完善本地安装、软链联调与热更新说明
+
 ## 发布说明
 
 发布到社区商店时：
