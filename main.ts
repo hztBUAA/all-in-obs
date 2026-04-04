@@ -502,10 +502,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		});
 
 		let markdown = turndown.turndown(contentHtml || "");
-		markdown = markdown
-			.replace(/\n{3,}/g, "\n\n")
-			.replace(/[ \t]+\n/g, "\n")
-			.trim();
+		markdown = this.normalizeMarkdownSpacing(markdown);
 
 		return markdown;
 	}
@@ -695,6 +692,39 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			return `<${value}>`;
 		}
 		return value;
+	}
+
+	normalizeMarkdownSpacing(markdown: string): string {
+		if (!markdown) {
+			return "";
+		}
+
+		const normalized = markdown
+			.replace(/\r\n/g, "\n")
+			.replace(/\u00a0/g, " ")
+			.replace(/\u200b/g, "");
+
+		const lines = normalized.split("\n");
+		const output: string[] = [];
+		let previousWasBlank = false;
+
+		for (const rawLine of lines) {
+			const cleanedLine = rawLine.replace(/[ \t\u3000]+$/g, "");
+			const isBlank = cleanedLine.replace(/[ \t\u3000]/g, "") === "";
+
+			if (isBlank) {
+				if (!previousWasBlank) {
+					output.push("");
+				}
+				previousWasBlank = true;
+				continue;
+			}
+
+			output.push(cleanedLine);
+			previousWasBlank = false;
+		}
+
+		return output.join("\n").replace(/^\n+|\n+$/g, "");
 	}
 
 	async ensureFolder(folderPath: string): Promise<void> {
