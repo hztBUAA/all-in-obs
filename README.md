@@ -1,10 +1,10 @@
 # Article Importer
 
-将微信公众号和小红书内容和其他平台的资源导入为结构化 Markdown，统一沉淀到知识库。
+将微信公众号、小红书、飞书文档等外部内容导入为结构化 Markdown，统一沉淀到知识库。
 
 ## 功能概览
 
-- 支持来源自动识别：微信公众号 / 小红书
+- 支持来源自动识别：微信公众号 / 小红书 / 飞书文档
 - 支持单条导入与批量导入（输入框按行粘贴）
 - 自动抽取正文并转换为 Markdown
 - 支持图片本地化下载，失败时自动回退远程链接
@@ -20,7 +20,7 @@
 
 ## 快速使用
 
-1. 在 Obsidian 启用插件后，点击左侧 Ribbon 图标，或执行命令 `导入文章（微信 / 小红书）`
+1. 在 Obsidian 启用插件后，点击左侧 Ribbon 图标，或执行命令 `导入内容（微信 / 小红书 / 飞书）`
 2. 粘贴链接或分享文本
 3. 可按行粘贴多条，实现批量导入
 4. 选择分类，按需勾选“下载图片到本地”
@@ -35,6 +35,11 @@
   - `https://www.xiaohongshu.com/explore/...`
   - `https://www.xiaohongshu.com/discovery/item/...`
   - `https://xhslink.com/...`
+- 飞书文档：
+  - `https://xxx.feishu.cn/docs/...`
+  - `https://xxx.feishu.cn/docx/...`
+  - `https://xxx.larksuite.com/docs/...`
+  - `https://xxx.larksuite.com/docx/...`
 
 ## 本地安装（开发/测试）
 
@@ -87,6 +92,7 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 - `categories`：分类列表（可在设置页维护）
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
+- `feishuSessionCookie`：飞书登录态预留字段，v1 公网文档默认不依赖
 
 ## frontmatter 字段
 
@@ -109,10 +115,13 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 
 小红书笔记会包含基础字段，如 `platform/title/source/category/imported_at/cover/type`。
 
+飞书文档会包含 `feishu_doc_token` 与 `feishu_doc_type`，并基于 token 执行更新覆盖，避免重复导入生成多份副本。
+
 ## 已知限制
 
 - 仅支持公开可访问内容（不处理登录、验证码、权限墙）
 - 微信风控页（环境异常/去验证）会终止导入并提示
+- 飞书 v1 仅支持公网可访问 `docs/docx` 文档；私有权限和更复杂协作场景暂未接入
 - 平台页面结构变化可能影响解析逻辑
 
 ## 发布说明

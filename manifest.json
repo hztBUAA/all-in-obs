@@ -3,7 +3,7 @@
   "name": "WeChat Article Importer",
   "version": "0.1.2",
   "minAppVersion": "0.15.0",
-  "description": "Import WeChat and Xiaohongshu content with metadata and media.",
+  "description": "Import WeChat, Xiaohongshu, and Feishu content with metadata and media.",
   "author": "hzt",
   "isDesktopOnly": false
 }
