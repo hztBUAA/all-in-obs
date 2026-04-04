@@ -6,7 +6,7 @@ const banner =
 	`/*
  * WeChat Article Importer plugin
  * Author: hzt
- * Version: 0.1.2
+ * Version: 0.1.3
  */
 `;
 
