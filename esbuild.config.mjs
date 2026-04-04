@@ -4,9 +4,9 @@ import {builtinModules} from "module";
 
 const banner =
 	`/*
- * WeChat Article Importer plugin
+ * Multi-Source Content Importer plugin
  * Author: hzt
- * Version: 0.1.3
+ * Version: 0.1.4
  */
 `;
 
