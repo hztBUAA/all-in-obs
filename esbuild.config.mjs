@@ -6,7 +6,7 @@ const banner =
 	`/*
  * Multi-Source Content Importer plugin
  * Author: hzt
- * Version: 0.1.4
+ * Version: 0.1.5
  */
 `;
 

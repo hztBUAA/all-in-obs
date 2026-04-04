@@ -10,6 +10,8 @@ import {
 	requestUrl,
 } from "obsidian";
 import TurndownService from "turndown";
+import * as http from "http";
+import * as https from "https";
 
 interface ImporterSettings {
 	defaultFolder: string;
@@ -361,10 +363,11 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 			const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/i);
 			if (!match?.[1]) {
-				return normalized.replace("/explore/", "/discovery/item/");
+				const normalizedPath = parsed.pathname.replace("/explore/", "/discovery/item/");
+				return `${parsed.origin}${normalizedPath}${parsed.search}`;
 			}
 
-			return `https://www.xiaohongshu.com/discovery/item/${match[1]}`;
+			return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
 		} catch (_error) {
 			return normalized.replace("/explore/", "/discovery/item/");
 		}
@@ -616,6 +619,10 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			throw new Error(`请求失败（HTTP ${response.status}）`);
 		}
 
+		if (this.isXhsUnavailablePage(response.text)) {
+			throw new Error("小红书笔记不可访问，可能已删除、无权限访问，或需要保留分享链接中的 xsec_token 参数。");
+		}
+
 		return response.text;
 	}
 
@@ -625,21 +632,122 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return this.normalizeXiaohongshuUrl(normalized);
 		}
 
-		const response = await requestUrl({
-			url: normalized,
-			method: "GET",
-			headers: this.buildXiaohongshuHeaders(),
-			throw: false,
-		});
+		try {
+			const response = await requestUrl({
+				url: normalized,
+				method: "GET",
+				headers: this.buildXiaohongshuHeaders(),
+				throw: false,
+			});
 
-		const match = response.text.match(
-			/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-		);
-		if (match?.[0]) {
-			return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
+			const location = response.headers.location || response.headers.Location;
+			if (location) {
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
+			}
+
+			const match = response.text.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			if (match?.[0]) {
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
+			}
+		} catch (_error) {
+			// Fall through to fetch() fallback below when Electron's network stack blocks the short link.
+		}
+
+		const fallback = await this.resolveXiaohongshuUrlWithFetch(normalized);
+		if (fallback) {
+			return fallback;
+		}
+
+		const nodeFallback = await this.resolveXiaohongshuUrlWithNode(normalized);
+		if (nodeFallback) {
+			return nodeFallback;
 		}
 
 		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
+	}
+
+	async resolveXiaohongshuUrlWithFetch(url: string): Promise<string | null> {
+		try {
+			const response = await fetch(url, {
+				method: "GET",
+				headers: this.buildXiaohongshuHeaders(),
+				redirect: "manual",
+			});
+			const location = response.headers.get("location");
+			if (location) {
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
+			}
+
+			const html = await response.text();
+			const match = html.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
+		} catch (_error) {
+			return null;
+		}
+	}
+
+	async resolveXiaohongshuUrlWithNode(url: string, redirects = 0): Promise<string | null> {
+		if (redirects > 5) {
+			return null;
+		}
+
+		try {
+			const parsed = new URL(url);
+			const client = parsed.protocol === "http:" ? http : https;
+
+			const response = await new Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined>; body: string }>(
+				(resolve, reject) => {
+					const request = client.request(
+						url,
+						{
+							method: "GET",
+							headers: this.buildXiaohongshuHeaders(),
+						},
+						(res) => {
+							const chunks: Buffer[] = [];
+							res.on("data", (chunk) => {
+								chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+							});
+							res.on("end", () => {
+								resolve({
+									statusCode: res.statusCode ?? 0,
+									headers: res.headers,
+									body: Buffer.concat(chunks).toString("utf8"),
+								});
+							});
+						}
+					);
+
+					request.on("error", reject);
+					request.end();
+				}
+			);
+
+			const locationHeader = response.headers.location;
+			const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
+			if (location) {
+				const nextUrl = new URL(location, url).toString();
+				if (/xhslink\.com/i.test(nextUrl)) {
+					return this.resolveXiaohongshuUrlWithNode(nextUrl, redirects + 1);
+				}
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(nextUrl));
+			}
+
+			const match = response.body.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
+		} catch (_error) {
+			return null;
+		}
+	}
+
+	isXhsUnavailablePage(html: string): boolean {
+		return /<title>\s*小红书\s*-\s*你访问的页面不见了\s*<\/title>/i.test(html);
 	}
 
 	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
