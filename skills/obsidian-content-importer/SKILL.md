@@ -47,6 +47,13 @@ node scripts/import-content.mjs \
   --url "https://www.xiaohongshu.com/discovery/item/xxxx"
 ```
 
+Install check:
+
+```bash
+node ~/.codex/skills/obsidian-content-importer/scripts/import-content.mjs --help
+node ~/.claude/skills/obsidian-content-importer/scripts/import-content.mjs --help
+```
+
 ## Agent workflow
 
 1. Decide the output directory with the user or infer it from context.
@@ -57,11 +64,16 @@ node scripts/import-content.mjs \
    - failed links and reasons
    - skipped invalid lines
 
+If the skill seems missing after installation:
+
+1. Confirm the final path ends with `obsidian-content-importer/SKILL.md` rather than an extra nested directory.
+2. Confirm `scripts/import-content.mjs` exists beside `SKILL.md`.
+3. Start a fresh agent session and invoke the skill by name in the task.
+
 ## Output contract
 
 - Notes: `<output-dir>/<title>.md`
 - Media: `<output-dir>/media/<title>/...`
 - Common frontmatter: `platform`, `title`, `source`, `category`, `imported_at`, `cover`, `type`
 - WeChat also writes: `account`, `wechat_id`, `alias`, `author`, `published_at`, `published_ts`, `description`
-
 
