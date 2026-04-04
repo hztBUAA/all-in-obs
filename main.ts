@@ -162,6 +162,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			let imageMap = new Map<string, string>();
 			const mediaFolder = baseFolder ? `${baseFolder}/media` : "media";
 			const safeTitle = this.sanitizeFileName(article.title, "Untitled WeChat Article");
+			const safeMediaTitle = this.sanitizeMediaBaseName(article.title, "Untitled-WeChat-Article");
 
 			if (article.images.length > 0) {
 				if (downloadMedia) {
@@ -171,7 +172,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 				imageMap = await this.buildImageMap(article.images, {
 					downloadMedia,
 					mediaFolder,
-					safeTitle,
+					safeMediaTitle,
 					articleUrl: normalizedUrl,
 				});
 			}
@@ -485,7 +486,8 @@ export default class WechatArticleImporterPlugin extends Plugin {
 					return "";
 				}
 				const alt = (el.getAttribute("alt") || "Image").replace(/\s+/g, " ").trim() || "Image";
-				return `![${alt}](${finalUrl})`;
+				const destination = this.toMarkdownDestination(finalUrl);
+				return `![${alt}](${destination})`;
 			},
 		});
 
@@ -510,7 +512,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 	async buildImageMap(
 		imageUrls: string[],
-		options: { downloadMedia: boolean; mediaFolder: string; safeTitle: string; articleUrl: string }
+		options: { downloadMedia: boolean; mediaFolder: string; safeMediaTitle: string; articleUrl: string }
 	): Promise<Map<string, string>> {
 		const map = new Map<string, string>();
 		let index = 1;
@@ -527,7 +529,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			}
 
 			const extension = this.guessImageExtension(normalized);
-			const baseName = `${options.safeTitle}-${index}`;
+			const baseName = `${options.safeMediaTitle}-${index}`;
 			const downloaded = await this.downloadMediaFile(normalized, options.mediaFolder, baseName, extension, options.articleUrl);
 			const finalRef = downloaded.startsWith("http") ? downloaded : `../media/${downloaded}`;
 			map.set(normalized, finalRef);
@@ -674,6 +676,25 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	sanitizeFileName(value: string, fallback: string): string {
 		const sanitized = this.sanitizePathSegment(value, fallback).replace(/\s+/g, " ").substring(0, 120);
 		return sanitized || fallback;
+	}
+
+	sanitizeMediaBaseName(value: string, fallback: string): string {
+		const sanitized = value
+			.replace(/[^a-zA-Z0-9\u4e00-\u9fa5\s-_]/g, "")
+			.trim()
+			.replace(/\s+/g, "-")
+			.substring(0, 96);
+		return sanitized || fallback;
+	}
+
+	toMarkdownDestination(value: string): string {
+		if (!value) {
+			return value;
+		}
+		if (/[\s()<>]/.test(value)) {
+			return `<${value}>`;
+		}
+		return value;
 	}
 
 	async ensureFolder(folderPath: string): Promise<void> {
