@@ -11,7 +11,7 @@ import {
 } from "obsidian";
 import TurndownService from "turndown";
 
-interface WechatImporterSettings {
+interface ImporterSettings {
 	defaultFolder: string;
 	categories: string[];
 	lastCategory: string;
@@ -67,7 +67,7 @@ interface XhsNoteData {
 	cover: string;
 }
 
-const DEFAULT_SETTINGS: WechatImporterSettings = {
+const DEFAULT_SETTINGS: ImporterSettings = {
 	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
@@ -110,8 +110,8 @@ class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
 	}
 }
 
-export default class WechatArticleImporterPlugin extends Plugin {
-	settings: WechatImporterSettings;
+export default class MultiSourceImporterPlugin extends Plugin {
+	settings: ImporterSettings;
 
 	async onload() {
 		await this.loadSettings();
@@ -128,7 +128,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 			},
 		});
 
-		this.addSettingTab(new WechatImporterSettingTab(this.app, this));
+		this.addSettingTab(new ImporterSettingTab(this.app, this));
 	}
 
 	async loadSettings() {
@@ -198,7 +198,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 	async promptForImportInput(): Promise<ImportInput | null> {
 		return new Promise((resolve) => {
-			const modal = new WechatInputModal(this.app, this.settings, (result) => resolve(result));
+			const modal = new ImportSourceModal(this.app, this.settings, (result) => resolve(result));
 			modal.open();
 		});
 	}
@@ -1406,10 +1406,10 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	}
 }
 
-class WechatImporterSettingTab extends PluginSettingTab {
-	plugin: WechatArticleImporterPlugin;
+class ImporterSettingTab extends PluginSettingTab {
+	plugin: MultiSourceImporterPlugin;
 
-	constructor(app: App, plugin: WechatArticleImporterPlugin) {
+	constructor(app: App, plugin: MultiSourceImporterPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -1513,15 +1513,15 @@ class WechatImporterSettingTab extends PluginSettingTab {
 	}
 }
 
-class WechatInputModal extends Modal {
+class ImportSourceModal extends Modal {
 	result: ImportInput | null = null;
 	onSubmit: (result: ImportInput | null) => void;
-	settings: WechatImporterSettings;
+	settings: ImporterSettings;
 	selectedCategory: string;
 	downloadMedia: boolean;
 	customFolderPath: string;
 
-	constructor(app: App, settings: WechatImporterSettings, onSubmit: (result: ImportInput | null) => void) {
+	constructor(app: App, settings: ImporterSettings, onSubmit: (result: ImportInput | null) => void) {
 		super(app);
 		this.settings = settings;
 		this.onSubmit = onSubmit;
