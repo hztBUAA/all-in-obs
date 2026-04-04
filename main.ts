@@ -67,7 +67,7 @@ interface FeishuDocData {
 	title: string;
 	source: string;
 	docToken: string;
-	docType: "docs" | "docx";
+	docType: "docs" | "docx" | "wiki";
 	description: string;
 	contentHtml: string;
 	contentMarkdown: string;
@@ -246,7 +246,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	extractFeishuUrl(input: string): string | null {
 		const normalizedInput = input.replace(/&amp;/g, "&");
 		const pattern =
-			/(https?:\/\/[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)\/(?:docs|docx)\/[a-zA-Z0-9]+(?:\?[^\s，,]*)?)/i;
+			/(https?:\/\/[\w.-]+\.(?:feishu\.cn|larksuite\.com|larkoffice\.com)\/(?:wiki|docs|docx)\/[a-zA-Z0-9]+(?:\?[^\s，,]*)?)/i;
 		const match = normalizedInput.match(pattern);
 		return match?.[1] ? this.normalizeFeishuUrl(match[1]) : null;
 	}
@@ -260,7 +260,11 @@ export default class WechatArticleImporterPlugin extends Plugin {
 				return normalized;
 			}
 
-			const docType = parsed.pathname.includes("/docx/") ? "docx" : "docs";
+			const docType = parsed.pathname.includes("/wiki/")
+				? "wiki"
+				: parsed.pathname.includes("/docx/")
+					? "docx"
+					: "docs";
 			return `${parsed.origin}/${docType}/${token}`;
 		} catch (_error) {
 			return normalized;
@@ -270,7 +274,7 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	extractFeishuDocToken(url: string): string {
 		try {
 			const parsed = new URL(url);
-			const match = parsed.pathname.match(/\/(?:docs|docx)\/([a-zA-Z0-9]+)/i);
+			const match = parsed.pathname.match(/\/(?:wiki|docs|docx)\/([a-zA-Z0-9]+)/i);
 			return match?.[1] ?? "";
 		} catch (_error) {
 			return "";
@@ -664,12 +668,16 @@ export default class WechatArticleImporterPlugin extends Plugin {
 	}
 
 	isFeishuPermissionPage(html: string): boolean {
-		return /无权限访问|申请权限|权限不足|文档不存在|页面不存在|登录后查看|继续访问飞书/i.test(html);
+		return (
+			/无权限访问|申请权限|权限不足|文档不存在|页面不存在|登录后查看|继续访问飞书/i.test(html) ||
+			/<meta[^>]+name=["']suite-passport-compile-at["']/i.test(html) ||
+			/window\.serverInjectRes\s*=|window\.passportSettings\s*=|accounts\/page\/login|suite\/passport/i.test(html)
+		);
 	}
 
 	extractFeishuDocData(sourceUrl: string, html: string): FeishuDocData {
 		const docToken = this.extractFeishuDocToken(sourceUrl);
-		const docType = sourceUrl.includes("/docx/") ? "docx" : "docs";
+		const docType = sourceUrl.includes("/wiki/") ? "wiki" : sourceUrl.includes("/docx/") ? "docx" : "docs";
 		const title = this.pickFirst([
 			this.extractMetaContent(html, "property", "og:title"),
 			this.extractMetaContent(html, "name", "twitter:title"),
@@ -1695,7 +1703,7 @@ class WechatInputModal extends Modal {
 			cls: "wca-modal-textarea",
 			attr: {
 				placeholder:
-					"例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx\\nhttps://xxx.feishu.cn/docx/xxxxxxxx",
+					"例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx\\nhttps://xxx.feishu.cn/wiki/xxxxxxxx",
 			},
 		});
 

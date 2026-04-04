@@ -36,8 +36,10 @@
   - `https://www.xiaohongshu.com/discovery/item/...`
   - `https://xhslink.com/...`
 - 飞书文档：
+  - `https://xxx.feishu.cn/wiki/...`
   - `https://xxx.feishu.cn/docs/...`
   - `https://xxx.feishu.cn/docx/...`
+  - `https://xxx.larksuite.com/wiki/...`
   - `https://xxx.larksuite.com/docs/...`
   - `https://xxx.larksuite.com/docx/...`
 
@@ -121,7 +123,7 @@ ln -s /Users/hzt/dp/wx-article "<你的Vault>/.obsidian/plugins/wechat-article-i
 
 - 仅支持公开可访问内容（不处理登录、验证码、权限墙）
 - 微信风控页（环境异常/去验证）会终止导入并提示
-- 飞书 v1 仅支持公网可访问 `docs/docx` 文档；私有权限和更复杂协作场景暂未接入
+- 飞书 v1 仅支持公网可访问 `wiki/docs/docx` 文档；私有权限和更复杂协作场景暂未接入
 - 平台页面结构变化可能影响解析逻辑
 
 ## 发布说明
