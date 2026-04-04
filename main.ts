@@ -222,6 +222,25 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		return null;
 	}
 
+	normalizeXiaohongshuUrl(url: string): string {
+		const normalized = this.normalizeArticleUrl(url);
+		try {
+			const parsed = new URL(normalized);
+			if (!/xiaohongshu\.com$/i.test(parsed.hostname)) {
+				return normalized;
+			}
+
+			const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/i);
+			if (!match?.[1]) {
+				return normalized.replace("/explore/", "/discovery/item/");
+			}
+
+			return `https://www.xiaohongshu.com/discovery/item/${match[1]}`;
+		} catch (_error) {
+			return normalized.replace("/explore/", "/discovery/item/");
+		}
+	}
+
 	normalizeArticleUrl(url: string): string {
 		let normalized = url.trim().replace(/&amp;/g, "&");
 		normalized = normalized.replace(/[。！!）)\]】>,，,]+$/, "");
@@ -344,8 +363,9 @@ export default class WechatArticleImporterPlugin extends Plugin {
 
 	async importXiaohongshuNote(url: string, category: string, downloadMedia: boolean, silent = false): Promise<boolean> {
 		try {
-			const html = await this.fetchXiaohongshuHtml(url);
-			const note = this.extractXhsNoteData(url, html);
+			const resolvedUrl = await this.resolveXiaohongshuUrl(url);
+			const html = await this.fetchXiaohongshuHtml(resolvedUrl);
+			const note = this.extractXhsNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
 
 			const baseFolder = this.settings.defaultFolder.trim();
@@ -456,6 +476,29 @@ export default class WechatArticleImporterPlugin extends Plugin {
 		}
 
 		return response.text;
+	}
+
+	async resolveXiaohongshuUrl(url: string): Promise<string> {
+		const normalized = this.normalizeArticleUrl(url);
+		if (!/xhslink\.com/i.test(normalized)) {
+			return this.normalizeXiaohongshuUrl(normalized);
+		}
+
+		const response = await requestUrl({
+			url: normalized,
+			method: "GET",
+			headers: this.buildXiaohongshuHeaders(),
+			throw: false,
+		});
+
+		const match = response.text.match(
+			/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+		);
+		if (match?.[0]) {
+			return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
+		}
+
+		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
 	}
 
 	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
