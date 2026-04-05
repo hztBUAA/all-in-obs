@@ -55,7 +55,7 @@ export class ImporterSettingTab extends PluginSettingTab {
 			);
 
 		containerEl.createEl("p", {
-			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行小红书实网 Smoke 测试”生成）`,
+			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行多平台实网 Smoke 测试”生成）`,
 		});
 
 		new Setting(containerEl).setName("分类管理").setHeading();

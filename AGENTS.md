@@ -5,7 +5,7 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 ## Standard Debug Loop
 
 1. Reproduce with real plugin entry:
-- In Obsidian command palette, run `运行小红书实网 Smoke 测试`.
+- In Obsidian command palette, run `运行多平台实网 Smoke 测试` (or XHS-only command if needed).
 - This calls the same service path used by normal import flow (`main.ts -> XhsResolver/XhsNoteService`).
 
 2. Inspect artifacts:
@@ -33,6 +33,11 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 - `http://xhslink.com/o/9WJrnkkjpx5`
 - `http://xhslink.com/o/8glUzkSMrIo`
 
+## WeChat Smoke Cases
+
+- Maintained in `src/platforms/wechat/smoke-cases.ts`.
+- Default list can be empty because WeChat may intermittently return verification pages by network.
+
 ## Architecture Boundaries
 
 - `main.ts`
@@ -43,6 +48,7 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 - `settings-tab.ts`: plugin settings UI.
 - `folder-suggest.ts`: folder path suggestions.
 - `types.ts`: plugin-level settings/input contracts.
+- `platform-smoke.ts`: unified real-network smoke runner for wechat/xiaohongshu.
 
 - `src/platforms/xhs`
 - `resolver.ts`: shortlink resolution (GET Location -> HEAD Location -> HTML extraction -> token rebuild).

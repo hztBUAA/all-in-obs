@@ -155,9 +155,9 @@ ln -s "$(pwd)" "<你的Vault>/.obsidian/plugins/multi-source-content-importer"
 4. 按需勾选“下载图片到本地”
 5. 点击导入
 
-#### 小红书排障与 Smoke
+#### 排障与 Smoke
 
-- 命令面板可执行 `运行小红书实网 Smoke 测试`
+- 命令面板可执行 `运行多平台实网 Smoke 测试`（兼容保留 `运行小红书实网 Smoke 测试`）
 - 报告输出：`.obsidian/plugins/multi-source-content-importer/xhs-smoke-report.json`
 - 调试日志：`.obsidian/plugins/multi-source-content-importer/xhs-debug.log`
 - 设置页可关闭 `xhsDebugEnabled`

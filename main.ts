@@ -6,12 +6,11 @@ import {
 import { ImportSourceModal } from "./src/plugin/import-modal";
 import { ImporterSettingTab } from "./src/plugin/settings-tab";
 import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
-import { buildSmokeSuiteReport } from "./src/plugin/smoke-report";
+import { runPlatformSmokeSuite, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
 import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
 import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
 import { XhsDebugLogger } from "./src/platforms/xhs/debug-logger";
 import { XhsResolver } from "./src/platforms/xhs/resolver";
-import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
 import { WechatArticleService } from "./src/platforms/wechat/article-service";
 import { buildWechatHeaders } from "./src/platforms/wechat/headers";
 
@@ -35,19 +34,6 @@ const DEFAULT_SETTINGS: ImporterSettings = {
 	downloadMedia: true,
 	xhsDebugEnabled: true,
 };
-
-interface XhsSmokeCaseResult {
-	name: string;
-	input: string;
-	extractedUrl: string;
-	resolvedUrl: string;
-	hasXsecToken: boolean;
-	unavailablePage: boolean;
-	title: string;
-	isVideo: boolean;
-	status: "success" | "failed";
-	error: string;
-}
 
 interface ImportDestination {
 	categoryName: string;
@@ -84,6 +70,14 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			name: "运行小红书实网 Smoke 测试",
 			callback: async () => {
 				await this.runXhsSmokeTests();
+			},
+		});
+
+		this.addCommand({
+			id: "run-platform-smoke-tests",
+			name: "运行多平台实网 Smoke 测试",
+			callback: async () => {
+				await this.runPlatformSmokeTests();
 			},
 		});
 
@@ -425,10 +419,10 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		try {
 			await this.xhsDebugLogger.reset(url);
 			await this.xhsDebugLogger.append("import-start", { inputUrl: url });
-			const resolvedUrl = await this.resolveXiaohongshuUrl(url);
+			const resolvedUrl = await this.xhsResolver.resolve(url);
 			await this.xhsDebugLogger.append("import-resolved-url", { resolvedUrl });
-			const html = await this.fetchXiaohongshuHtml(resolvedUrl);
-			const note = this.extractXhsNoteData(resolvedUrl, html);
+			const html = await this.xhsNoteService.fetchHtml(resolvedUrl);
+			const note = this.xhsNoteService.extractNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
 
 			const destination = this.resolveImportDestination(category, useCustomFolder, customFolderPath);
@@ -526,14 +520,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 	}
 
-	async fetchXiaohongshuHtml(url: string): Promise<string> {
-		return this.xhsNoteService.fetchHtml(url);
-	}
-
-	async resolveXiaohongshuUrl(url: string): Promise<string> {
-		return this.xhsResolver.resolve(url);
-	}
-
 	getXhsDebugLogPath(): string {
 		return this.xhsDebugLogger.getLogPath();
 	}
@@ -543,93 +529,23 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	async runXhsSmokeTests(): Promise<void> {
-		const startedAt = new Date().toISOString();
-		await this.xhsDebugLogger.reset("SMOKE_SUITE");
-		await this.xhsDebugLogger.append("smoke-suite-start", { caseCount: XHS_SMOKE_CASES.length });
+		await this.runPlatformSmokeTests(["xiaohongshu"]);
+	}
 
-		const results: XhsSmokeCaseResult[] = [];
-		for (const testCase of XHS_SMOKE_CASES) {
-			const extracted = this.extractXiaohongshuUrl(testCase.input) || "";
-			if (!extracted) {
-				results.push({
-					name: testCase.name,
-					input: testCase.input,
-					extractedUrl: "",
-					resolvedUrl: "",
-					hasXsecToken: false,
-					unavailablePage: false,
-					title: "",
-					isVideo: false,
-					status: "failed",
-					error: "未能从输入文本识别出小红书链接",
-				});
-				continue;
-			}
-
-			await this.xhsDebugLogger.append("smoke-case-start", { name: testCase.name, extractedUrl: extracted });
-			let resolvedUrl = "";
-			let hasXsecToken = false;
-			try {
-				resolvedUrl = await this.resolveXiaohongshuUrl(extracted);
-				hasXsecToken = /[?&]xsec_token=/i.test(resolvedUrl);
-				const html = await this.fetchXiaohongshuHtml(resolvedUrl);
-				const note = this.extractXhsNoteData(resolvedUrl, html);
-				const unavailable = this.isXhsUnavailablePage(html);
-				results.push({
-					name: testCase.name,
-					input: testCase.input,
-					extractedUrl: extracted,
-					resolvedUrl,
-					hasXsecToken,
-					unavailablePage: unavailable,
-					title: note.title,
-					isVideo: note.isVideo,
-					status: "success",
-					error: "",
-				});
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				results.push({
-					name: testCase.name,
-					input: testCase.input,
-					extractedUrl: extracted,
-					resolvedUrl,
-					hasXsecToken,
-					unavailablePage: /不可访问|unavailable/i.test(message),
-					title: "",
-					isVideo: false,
-					status: "failed",
-					error: message,
-				});
-			}
-		}
-
-		const successCount = results.filter((item) => item.status === "success").length;
-		const failedCount = results.length - successCount;
-		const report = buildSmokeSuiteReport(
-			this.manifest.version,
-			startedAt,
-			results,
-			successCount,
-			failedCount
-		);
-
-		const reportPath = this.getXhsSmokeReportPath();
-		await this.app.vault.adapter.write(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-		await this.xhsDebugLogger.append("smoke-suite-finished", {
-			successCount,
-			failedCount,
-			reportPath,
+	async runPlatformSmokeTests(platforms: SupportedSmokePlatform[] = ["wechat", "xiaohongshu"]): Promise<void> {
+		const result = await runPlatformSmokeSuite({
+			app: this.app,
+			pluginVersion: this.manifest.version,
+			reportPath: this.getXhsSmokeReportPath(),
+			platforms,
+			xhsDebugLogger: this.xhsDebugLogger,
+			xhsResolver: this.xhsResolver,
+			xhsNoteService: this.xhsNoteService,
+			wechatArticleService: this.wechatArticleService,
+			extractXhsUrl: (input) => this.extractXiaohongshuUrl(input),
+			extractWechatUrl: (input) => this.extractWechatUrl(input),
 		});
-		new Notice(`XHS Smoke 测试完成：成功 ${successCount}，失败 ${failedCount}。报告：${reportPath}`);
-	}
-
-	isXhsUnavailablePage(html: string): boolean {
-		return this.xhsNoteService.isUnavailablePage(html);
-	}
-
-	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
-		return this.xhsNoteService.extractNoteData(sourceUrl, html);
+		new Notice(`平台 Smoke 测试完成：成功 ${result.successCount}，失败 ${result.failedCount}。报告：${result.reportPath}`);
 	}
 
 	buildXhsFrontmatter(note: XhsNoteData, category: string, cover: string): string {
