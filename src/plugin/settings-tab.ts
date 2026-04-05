@@ -5,6 +5,7 @@ export interface ImporterSettingsTabHost {
 	settings: ImporterSettings;
 	saveSettings(): Promise<void>;
 	normalizeVaultPath(path: string): string;
+	getAvailableCategories(): string[];
 	getDebugLogPath(): string;
 	getSmokeReportPath(): string;
 	getSmokeCasesText(platform: "wechat" | "xiaohongshu"): string;
@@ -156,15 +157,27 @@ export class ImporterSettingTab extends PluginSettingTab {
 		new Setting(categorySection).setName("分类管理").setHeading();
 		categorySection.createEl("p", {
 			cls: "wca-settings-intro",
-			text: "可编辑分类名称、调整顺序或删除分类；导入弹窗会自动合并默认目录下一级子目录，并固定包含“其他”和“自定义文件夹”。",
+			text: "可编辑自定义分类名称、调整顺序或删除分类；自动发现的目录会同步展示为只读项。导入弹窗固定包含“其他”和“自定义文件夹”。",
 		});
 
-		this.plugin.settings.categories.forEach((category, index) => {
+		const mergedCategories = this.plugin.getAvailableCategories();
+		const customCategories = this.plugin.settings.categories;
+
+		mergedCategories.forEach((category) => {
+			const customIndex = customCategories.indexOf(category);
+			if (customIndex === -1) {
+				new Setting(categorySection)
+					.setName("自动目录")
+					.setDesc("来自默认文件夹下一级子目录（只读）")
+					.addText((text) => text.setValue(category).setDisabled(true));
+				return;
+			}
+
 			const setting = new Setting(categorySection)
-				.setName(`分类 ${index + 1}`)
+				.setName(`分类 ${customIndex + 1}`)
 				.addText((text) =>
 					text.setValue(category).onChange(async (value) => {
-						this.plugin.settings.categories[index] = value.trim() || "未命名分类";
+						this.plugin.settings.categories[customIndex] = value.trim() || "未命名分类";
 						await this.plugin.saveSettings();
 					})
 				);
@@ -173,12 +186,12 @@ export class ImporterSettingTab extends PluginSettingTab {
 				button
 					.setIcon("arrow-up")
 					.setTooltip("上移")
-					.setDisabled(index === 0)
+					.setDisabled(customIndex === 0)
 					.onClick(async () => {
-						if (index > 0) {
-							[this.plugin.settings.categories[index - 1], this.plugin.settings.categories[index]] = [
-								this.plugin.settings.categories[index],
-								this.plugin.settings.categories[index - 1],
+						if (customIndex > 0) {
+							[this.plugin.settings.categories[customIndex - 1], this.plugin.settings.categories[customIndex]] = [
+								this.plugin.settings.categories[customIndex],
+								this.plugin.settings.categories[customIndex - 1],
 							];
 							await this.plugin.saveSettings();
 							this.display();
@@ -190,12 +203,12 @@ export class ImporterSettingTab extends PluginSettingTab {
 				button
 					.setIcon("arrow-down")
 					.setTooltip("下移")
-					.setDisabled(index === this.plugin.settings.categories.length - 1)
+					.setDisabled(customIndex === this.plugin.settings.categories.length - 1)
 					.onClick(async () => {
-						if (index < this.plugin.settings.categories.length - 1) {
-							[this.plugin.settings.categories[index], this.plugin.settings.categories[index + 1]] = [
-								this.plugin.settings.categories[index + 1],
-								this.plugin.settings.categories[index],
+						if (customIndex < this.plugin.settings.categories.length - 1) {
+							[this.plugin.settings.categories[customIndex], this.plugin.settings.categories[customIndex + 1]] = [
+								this.plugin.settings.categories[customIndex + 1],
+								this.plugin.settings.categories[customIndex],
 							];
 							await this.plugin.saveSettings();
 							this.display();
@@ -207,8 +220,8 @@ export class ImporterSettingTab extends PluginSettingTab {
 				button
 					.setButtonText("删除")
 					.onClick(async () => {
-						const removed = this.plugin.settings.categories[index];
-						this.plugin.settings.categories.splice(index, 1);
+						const removed = this.plugin.settings.categories[customIndex];
+						this.plugin.settings.categories.splice(customIndex, 1);
 						if (this.plugin.settings.lastCategory === removed) {
 							this.plugin.settings.lastCategory = "";
 						}

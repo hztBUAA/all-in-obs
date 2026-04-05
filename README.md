@@ -56,7 +56,7 @@
 ### 设置项说明
 
 - `defaultFolder`：导入根目录
-- `categories`：分类列表，可在设置页维护；导入时也会自动识别 `defaultFolder` 下已有的一级子目录
+- `categories`：分类列表，可在设置页维护；导入时会自动识别 `defaultFolder` 下已有的一级子目录，并在设置页同步展示（自动目录为只读）
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
 - `debugEnabled`：是否写入多平台统一调试日志（默认开启）
@@ -300,6 +300,12 @@ npx tsc --noEmit
 6. 在 Release 上传 `main.js`、`manifest.json`、`styles.css`
 
 ## Changelog
+
+### 0.1.7
+
+- 修复设置页“分类管理”与导入弹窗分类来源不一致的问题
+- 设置页现在同步展示“自定义分类 + 自动发现目录”，其中自动目录为只读项
+- 保持原有可编辑边界：重命名、排序、删除仅作用于手动配置分类
 
 ### 0.1.6
 

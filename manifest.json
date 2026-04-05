@@ -1,7 +1,7 @@
 {
 	"id": "multi-source-content-importer",
 	"name": "Multi-Source Content Importer",
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"minAppVersion": "0.15.0",
 	"description": "Import content from WeChat and Xiaohongshu into Obsidian with metadata and media.",
 	"author": "hzt",
