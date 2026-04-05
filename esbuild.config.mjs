@@ -1,16 +1,12 @@
 import esbuild from "esbuild";
 import process from "process";
 import {builtinModules} from "module";
-import { readFileSync } from "fs";
-
-const packageJson = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
-const version = process.env.npm_package_version || packageJson.version;
 
 const banner =
 	`/*
  * Multi-Source Content Importer plugin
  * Author: hzt
- * Version: ${version}
+ * Version: 0.1.5
  */
 `;
 

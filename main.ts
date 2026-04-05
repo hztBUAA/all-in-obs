@@ -10,6 +10,8 @@ import {
 	requestUrl,
 } from "obsidian";
 import TurndownService from "turndown";
+import * as http from "http";
+import * as https from "https";
 
 interface ImporterSettings {
 	defaultFolder: string;
@@ -65,36 +67,6 @@ interface XhsNoteData {
 	isVideo: boolean;
 	tags: string[];
 	cover: string;
-}
-
-interface XhsImageItem {
-	urlDefault?: string;
-}
-
-interface XhsVideoStreamItem {
-	masterUrl?: string;
-}
-
-interface XhsVideoStream {
-	h264?: XhsVideoStreamItem[];
-	h265?: XhsVideoStreamItem[];
-}
-
-interface XhsNote {
-	type?: string;
-	desc?: string;
-	imageList?: XhsImageItem[];
-	video?: {
-		media?: {
-			stream?: XhsVideoStream;
-		};
-	};
-}
-
-interface XhsState {
-	note?: {
-		noteDetailMap?: Record<string, { note?: XhsNote }>;
-	};
 }
 
 const DEFAULT_SETTINGS: ImporterSettings = {
@@ -396,7 +368,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			}
 
 			return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
-		} catch {
+		} catch (_error) {
 			return normalized.replace("/explore/", "/discovery/item/");
 		}
 	}
@@ -660,63 +632,118 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return this.normalizeXiaohongshuUrl(normalized);
 		}
 
-		const resolvedUrl = await this.resolveXiaohongshuShortLink(normalized);
-		if (resolvedUrl) {
-			return resolvedUrl;
-		}
-
-		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
-	}
-
-	async resolveXiaohongshuShortLink(url: string, redirects = 0): Promise<string | null> {
-		if (redirects > 5) {
-			return null;
-		}
-
 		try {
 			const response = await requestUrl({
+				url: normalized,
 				method: "GET",
-				url,
 				headers: this.buildXiaohongshuHeaders(),
 				throw: false,
 			});
 
 			const location = response.headers.location || response.headers.Location;
 			if (location) {
-				const nextUrl = new URL(this.decodeHtmlEntities(location), url).toString();
-				if (/xhslink\.com/i.test(nextUrl)) {
-					return this.resolveXiaohongshuShortLink(nextUrl, redirects + 1);
-				}
-				return this.normalizeXiaohongshuUrl(nextUrl);
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
 			}
 
-			return this.extractXiaohongshuUrlFromHtml(response.text);
-		} catch {
+			const match = response.text.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			if (match?.[0]) {
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
+			}
+		} catch (_error) {
+			// Fall through to fetch() fallback below when Electron's network stack blocks the short link.
+		}
+
+		const fallback = await this.resolveXiaohongshuUrlWithFetch(normalized);
+		if (fallback) {
+			return fallback;
+		}
+
+		const nodeFallback = await this.resolveXiaohongshuUrlWithNode(normalized);
+		if (nodeFallback) {
+			return nodeFallback;
+		}
+
+		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
+	}
+
+	async resolveXiaohongshuUrlWithFetch(url: string): Promise<string | null> {
+		try {
+			const response = await fetch(url, {
+				method: "GET",
+				headers: this.buildXiaohongshuHeaders(),
+				redirect: "manual",
+			});
+			const location = response.headers.get("location");
+			if (location) {
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
+			}
+
+			const html = await response.text();
+			const match = html.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
+		} catch (_error) {
 			return null;
 		}
 	}
 
-	extractXiaohongshuUrlFromHtml(html: string): string | null {
-		const directMatch = html.match(
-			/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-		);
-		if (directMatch?.[0]) {
-			return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(directMatch[0]));
+	async resolveXiaohongshuUrlWithNode(url: string, redirects = 0): Promise<string | null> {
+		if (redirects > 5) {
+			return null;
 		}
 
-		const ogUrl = this.extractMetaContent(html, "property", "og:url");
-		if (ogUrl) {
-			return this.normalizeXiaohongshuUrl(ogUrl);
-		}
+		try {
+			const parsed = new URL(url);
+			const client = parsed.protocol === "http:" ? http : https;
 
-		const canonicalMatch =
-			html.match(/<link\b[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["'][^>]*>/i) ||
-			html.match(/<link\b[^>]*href=["']([^"']+)["'][^>]*rel=["']canonical["'][^>]*>/i);
-		if (canonicalMatch?.[1]) {
-			return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(canonicalMatch[1]));
-		}
+			const response = await new Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined>; body: string }>(
+				(resolve, reject) => {
+					const request = client.request(
+						url,
+						{
+							method: "GET",
+							headers: this.buildXiaohongshuHeaders(),
+						},
+						(res) => {
+							const chunks: Buffer[] = [];
+							res.on("data", (chunk) => {
+								chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+							});
+							res.on("end", () => {
+								resolve({
+									statusCode: res.statusCode ?? 0,
+									headers: res.headers,
+									body: Buffer.concat(chunks).toString("utf8"),
+								});
+							});
+						}
+					);
 
-		return null;
+					request.on("error", reject);
+					request.end();
+				}
+			);
+
+			const locationHeader = response.headers.location;
+			const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
+			if (location) {
+				const nextUrl = new URL(location, url).toString();
+				if (/xhslink\.com/i.test(nextUrl)) {
+					return this.resolveXiaohongshuUrlWithNode(nextUrl, redirects + 1);
+				}
+				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(nextUrl));
+			}
+
+			const match = response.body.match(
+				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
+			);
+			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
+		} catch (_error) {
+			return null;
+		}
 	}
 
 	isXhsUnavailablePage(html: string): boolean {
@@ -752,8 +779,8 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		};
 	}
 
-	parseXhsState(html: string): XhsState | null {
-		const stateMatch = html.match(/window\.__INITIAL_STATE__=([\s\S]*?)<\/script>/);
+	parseXhsState(html: string): any | null {
+		const stateMatch = html.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/s);
 		if (!stateMatch?.[1]) {
 			return null;
 		}
@@ -761,13 +788,13 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		try {
 			const jsonStr = stateMatch[1].trim();
 			const cleanedJson = jsonStr.replace(/undefined/g, "null");
-			return JSON.parse(cleanedJson) as XhsState;
-		} catch {
+			return JSON.parse(cleanedJson);
+		} catch (_error) {
 			return null;
 		}
 	}
 
-	getXhsNoteObject(state: XhsState): XhsNote | null {
+	getXhsNoteObject(state: any): any | null {
 		try {
 			const map = state?.note?.noteDetailMap;
 			if (!map || typeof map !== "object") {
@@ -775,19 +802,19 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			}
 			const noteId = Object.keys(map)[0];
 			return map[noteId]?.note ?? null;
-		} catch {
+		} catch (_error) {
 			return null;
 		}
 	}
 
-	extractXhsImages(note: XhsNote | null): string[] {
+	extractXhsImages(note: any): string[] {
 		const list = Array.isArray(note?.imageList) ? note.imageList : [];
 		return list
-			.map((img) => this.normalizeMediaUrl(img?.urlDefault || ""))
+			.map((img: any) => this.normalizeMediaUrl(img?.urlDefault || ""))
 			.filter((url: string) => !!url);
 	}
 
-	extractXhsVideoUrl(note: XhsNote | null): string | null {
+	extractXhsVideoUrl(note: any): string | null {
 		const stream = note?.video?.media?.stream;
 		const h264 = Array.isArray(stream?.h264) ? stream.h264 : [];
 		const h265 = Array.isArray(stream?.h265) ? stream.h265 : [];
@@ -796,7 +823,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return normalized || null;
 	}
 
-	extractXhsContent(note: XhsNote | null, contentFromHtml: string): string {
+	extractXhsContent(note: any, contentFromHtml: string): string {
 		const htmlText = contentFromHtml
 			.replace(/<[^>]+>/g, "")
 			.replace(/\[话题\]/g, "")
@@ -1004,7 +1031,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			const doc = new DOMParser().parseFromString(html, "text/html");
 			const contentEl = doc.querySelector("#js_content");
 			return contentEl?.innerHTML ?? "";
-		} catch {
+		} catch (_error) {
 			return "";
 		}
 	}
@@ -1015,7 +1042,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 
 		try {
-			const doc = new DOMParser().parseFromString(`<div id="wechat-root">${contentHtml}</div>`, "text/html");
+			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
 			const root = doc.querySelector("#wechat-root");
 			if (!root) {
 				return contentHtml;
@@ -1035,7 +1062,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			});
 
 			return root.innerHTML;
-		} catch {
+		} catch (_error) {
 			return contentHtml;
 		}
 	}
@@ -1052,7 +1079,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 
 		try {
-			const doc = new DOMParser().parseFromString(`<div id="wechat-root">${contentHtml}</div>`, "text/html");
+			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
 			doc.querySelectorAll("img").forEach((img) => {
 				const rawUrl = img.getAttribute("data-src") || img.getAttribute("src") || "";
 				const normalized = this.normalizeMediaUrl(rawUrl);
@@ -1060,7 +1087,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 					urls.add(normalized);
 				}
 			});
-		} catch {
+		} catch (_error) {
 			const pattern = /<img\b[^>]*?(?:data-src|src)=['"]([^'"]+)['"][^>]*>/gi;
 			let match: RegExpExecArray | null = pattern.exec(contentHtml);
 			while (match) {
@@ -1093,7 +1120,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 		turndown.addRule("wechatImage", {
 			filter: "img",
-			replacement: (_content: string, node: Node) => {
+			replacement: (_content, node) => {
 				const el = node as HTMLElement;
 				const rawUrl = el.getAttribute("data-src") || el.getAttribute("src") || "";
 				const finalUrl = resolveImage(rawUrl);
@@ -1107,7 +1134,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		});
 
 		turndown.addRule("removeSvg", {
-			filter: (node) => node.nodeName.toLowerCase() === "svg",
+			filter: "svg",
 			replacement: () => "",
 		});
 
@@ -1229,7 +1256,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 					return ext === "jpeg" ? ".jpg" : `.${ext}`;
 				}
 			}
-		} catch {
+		} catch (_error) {
 			// Ignore URL parsing error and fall back to default extension.
 		}
 
@@ -1504,7 +1531,7 @@ class ImporterSettingTab extends PluginSettingTab {
 			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
 			.addText((text) =>
 				text
-					.setPlaceholder("External files")
+					.setPlaceholder("External Files")
 					.setValue(this.plugin.settings.defaultFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.defaultFolder = this.plugin.normalizeVaultPath(value);
@@ -1585,10 +1612,10 @@ class ImporterSettingTab extends PluginSettingTab {
 		});
 
 		new Setting(containerEl).addButton((button) =>
-				button.setButtonText("新增分类").onClick(async () => {
-					this.plugin.settings.categories.push("新分类");
-					await this.plugin.saveSettings();
-					this.display();
+			button.setButtonText("新增分类").onClick(async () => {
+				this.plugin.settings.categories.push("新分类");
+				await this.plugin.saveSettings();
+				this.display();
 			})
 		);
 	}
@@ -1649,9 +1676,9 @@ class ImportSourceModal extends Modal {
 		const input = inputRow.createEl("textarea", {
 			cls: "wca-modal-textarea",
 			attr: {
-					placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
-				},
-			});
+				placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
+			},
+		});
 
 		const categoryRow = contentEl.createEl("div", { cls: "wca-modal-row" });
 		categoryRow.createEl("p", { text: "选择分类：" });
@@ -1662,7 +1689,7 @@ class ImportSourceModal extends Modal {
 			cls: "wca-custom-folder-input",
 			attr: {
 				type: "text",
-				placeholder: "例如：projects/clippings（输入 / 表示仓库根目录）",
+				placeholder: "例如：Projects/Clippings（输入 / 表示仓库根目录）",
 			},
 		});
 		customFolderInput.value = this.customFolderPath;

@@ -5,7 +5,6 @@
     "inlineSources": true,
     "module": "ESNext",
     "target": "ES6",
-    "allowSyntheticDefaultImports": true,
     "allowJs": true,
     "noImplicitAny": true,
     "moduleResolution": "node",
