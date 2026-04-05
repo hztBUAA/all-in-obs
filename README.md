@@ -256,7 +256,25 @@ npm run dev
 
 `npm run dev` 会监听 [`main.ts`](main.ts)，变更后自动重新生成 `main.js`。
 
-### 4. 在 Obsidian 中热更新
+### 4. 本地检查
+
+开发时推荐至少跑这 3 个检查：
+
+```bash
+npm run lint
+npm run build
+npx tsc --noEmit
+```
+
+它们分别用于：
+
+- `npm run lint`：检查常见代码问题和 TypeScript/ESLint 规则
+- `npm run build`：确认插件可以正常打包生成 `main.js`
+- `npx tsc --noEmit`：确认类型检查通过，但不额外输出文件
+
+如果只想在提交前做一次快速自检，建议按上面这个顺序执行。
+
+### 5. 在 Obsidian 中热更新
 
 - 保持 `npm run dev` 运行
 - 在 Obsidian 中关闭再启用该插件
@@ -302,6 +320,12 @@ node ~/.claude/skills/obsidian-content-importer/scripts/import-content.mjs --hel
 
 ## Changelog
 
+### 0.1.6
+
+- 移除 Obsidian 社区审核不允许的 Node 内置网络模块与 `fetch` 用法，统一改为 `requestUrl`
+- 为小红书状态解析补充明确类型，清理审核命中的 `any` 和若干细节问题
+- 新增项目内 ESLint 工具链与 `npm run lint` 命令，补齐开发自检流程
+
 ### 0.1.5
 
 - 修复小红书 `xhslink` 短链解析不稳定的问题，优先保留跳转后的分享参数，避免丢失 `xsec_token`
@@ -319,10 +343,12 @@ node ~/.claude/skills/obsidian-content-importer/scripts/import-content.mjs --hel
 
 发布到社区商店时：
 
-1. 更新 `manifest.json` 与 `versions.json` 版本
-2. 执行 `npm run build`
-3. 创建与版本号一致的 Git tag 或 GitHub Release，例如 `0.1.4`
-4. Release 上传 `main.js`、`manifest.json`、`styles.css`
+1. 更新 `package.json` 版本，并同步 `manifest.json` 与 `versions.json`
+2. 执行 `npm run lint`
+3. 执行 `npm run build`
+4. 执行 `npx tsc --noEmit`
+5. 创建与版本号一致的 Git tag 或 GitHub Release，例如 `0.1.6`
+6. Release 上传 `main.js`、`manifest.json`、`styles.css`
 
 ## Acknowledgements
 
