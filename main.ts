@@ -88,9 +88,12 @@ interface ImportDestination {
 }
 
 class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
-	constructor(app: App, textInputEl: HTMLInputElement) {
+	onSelectSuggestion?: (value: string) => void;
+
+	constructor(app: App, textInputEl: HTMLInputElement, onSelectSuggestion?: (value: string) => void) {
 		super(app, textInputEl);
 		this.limit = 200;
+		this.onSelectSuggestion = onSelectSuggestion;
 	}
 
 	getSuggestions(query: string): string[] {
@@ -108,6 +111,7 @@ class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
 		this.setValue(value);
+		this.onSelectSuggestion?.(value);
 		this.close();
 	}
 }
@@ -200,7 +204,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 	async promptForImportInput(): Promise<ImportInput | null> {
 		return new Promise((resolve) => {
-			const modal = new ImportSourceModal(this.app, this.settings, (result) => resolve(result));
+			const modal = new ImportSourceModal(this.app, this.settings, this.getAvailableCategories(), (result) => resolve(result));
 			modal.open();
 		});
 	}
@@ -230,6 +234,55 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return "";
 		}
 		return this.normalizeVaultPath(displayPath);
+	}
+
+	getDetectedCategoriesFromVault(): string[] {
+		const baseFolder = this.normalizeVaultPath(this.settings.defaultFolder);
+		const basePrefix = baseFolder ? `${baseFolder}/` : "";
+		const categories = new Set<string>();
+
+		for (const folder of this.app.vault.getAllFolders(true)) {
+			const normalizedFolderPath = this.normalizeVaultPath(folder.path || "");
+			if (!normalizedFolderPath) {
+				continue;
+			}
+
+			let relativePath = normalizedFolderPath;
+			if (baseFolder) {
+				if (normalizedFolderPath === baseFolder) {
+					continue;
+				}
+				if (!normalizedFolderPath.startsWith(basePrefix)) {
+					continue;
+				}
+				relativePath = normalizedFolderPath.slice(basePrefix.length);
+			}
+
+			const segments = relativePath.split("/").filter(Boolean);
+			if (segments.length !== 1) {
+				continue;
+			}
+			categories.add(segments[0]);
+		}
+
+		return Array.from(categories).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+	}
+
+	getAvailableCategories(): string[] {
+		const merged: string[] = [];
+		const seen = new Set<string>();
+		const append = (category: string) => {
+			const name = category.trim();
+			if (!name || name === "其他" || name === CUSTOM_FOLDER_CATEGORY || seen.has(name)) {
+				return;
+			}
+			seen.add(name);
+			merged.push(name);
+		};
+
+		this.settings.categories.forEach((category) => append(category));
+		this.getDetectedCategoriesFromVault().forEach((category) => append(category));
+		return merged;
 	}
 
 	resolveImportDestination(category: string, useCustomFolder: boolean, customFolderPath: string): ImportDestination {
@@ -1550,7 +1603,7 @@ class ImporterSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl).setName("分类管理").setHeading();
-		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });
+		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗会合并显示默认目录下的一级子目录，并固定包含“其他”和“自定义文件夹”。" });
 
 		this.plugin.settings.categories.forEach((category, index) => {
 			const setting = new Setting(containerEl)
@@ -1625,13 +1678,15 @@ class ImportSourceModal extends Modal {
 	result: ImportInput | null = null;
 	onSubmit: (result: ImportInput | null) => void;
 	settings: ImporterSettings;
+	availableCategories: string[];
 	selectedCategory: string;
 	downloadMedia: boolean;
 	customFolderPath: string;
 
-	constructor(app: App, settings: ImporterSettings, onSubmit: (result: ImportInput | null) => void) {
+	constructor(app: App, settings: ImporterSettings, availableCategories: string[], onSubmit: (result: ImportInput | null) => void) {
 		super(app);
 		this.settings = settings;
+		this.availableCategories = availableCategories;
 		this.onSubmit = onSubmit;
 		this.selectedCategory = this.resolveInitialCategory();
 		this.downloadMedia = this.settings.downloadMedia;
@@ -1645,10 +1700,10 @@ class ImportSourceModal extends Modal {
 		if (this.settings.lastCategory === CUSTOM_FOLDER_CATEGORY && this.settings.lastCustomFolder) {
 			return CUSTOM_FOLDER_CATEGORY;
 		}
-		if (this.settings.lastCategory && this.settings.categories.includes(this.settings.lastCategory)) {
+		if (this.settings.lastCategory && this.availableCategories.includes(this.settings.lastCategory)) {
 			return this.settings.lastCategory;
 		}
-		return this.settings.categories[0] || "其他";
+		return this.availableCategories[0] || "其他";
 	}
 
 	normalizeCustomFolderInput(path: string): string | null {
@@ -1696,9 +1751,11 @@ class ImportSourceModal extends Modal {
 		customFolderInput.addEventListener("input", () => {
 			this.customFolderPath = customFolderInput.value;
 		});
-		new VaultFolderPathSuggest(this.app, customFolderInput);
+		new VaultFolderPathSuggest(this.app, customFolderInput, (value) => {
+			this.customFolderPath = value;
+		});
 
-		const categoryList = [...this.settings.categories, "其他", CUSTOM_FOLDER_CATEGORY];
+		const categoryList = [...this.availableCategories, "其他", CUSTOM_FOLDER_CATEGORY];
 		const updateCustomFolderRow = () => {
 			customFolderRow.style.display = this.selectedCategory === CUSTOM_FOLDER_CATEGORY ? "flex" : "none";
 		};
@@ -1746,11 +1803,12 @@ class ImportSourceModal extends Modal {
 			const useCustomFolder = this.selectedCategory === CUSTOM_FOLDER_CATEGORY;
 			let customFolderPath = "";
 			if (useCustomFolder) {
-				const normalizedPath = this.normalizeCustomFolderInput(this.customFolderPath);
+				const normalizedPath = this.normalizeCustomFolderInput(customFolderInput.value);
 				if (!normalizedPath) {
 					new Notice("请选择自定义文件夹路径。");
 					return;
 				}
+				this.customFolderPath = normalizedPath;
 				const vaultPath = normalizedPath === "/" ? "" : normalizedPath;
 				const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
 				if (abstractFile && !(abstractFile instanceof TFolder)) {

@@ -56,7 +56,7 @@
 ### 设置项说明
 
 - `defaultFolder`：导入根目录
-- `categories`：分类列表，可在设置页维护
+- `categories`：分类列表，可在设置页维护；导入时也会自动识别 `defaultFolder` 下已有的一级子目录
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
 
