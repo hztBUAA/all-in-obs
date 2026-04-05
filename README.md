@@ -303,9 +303,14 @@ npx tsc --noEmit
 
 ### 0.1.6
 
-- 移除 Obsidian 社区审核不允许的 Node 内置网络模块与 `fetch` 用法，统一改为 `requestUrl`
-- 为小红书状态解析补充明确类型，清理审核命中的 `any` 和若干细节问题
-- 新增项目内 ESLint 工具链与 `npm run lint` 命令，补齐开发自检流程
+- 重构为“插件壳 + 平台服务”结构，拆分 `main.ts` 并将微信/小红书逻辑模块化到 `src/platforms/*`
+- 设置页统一为“多平台调试”章节，支持一键运行 smoke、查看报告、查看统一调试日志
+- smoke 用例支持在设置页按平台自定义（每行一条），并通过真实插件入口执行
+- 调试日志与报告统一路径：
+- 日志：`.obsidian/plugins/multi-source-content-importer/debug.log`
+- 报告：`.obsidian/plugins/multi-source-content-importer/smoke-report.json`
+- 吸收 `fix/custom-folder` 能力：导入分类自动合并 `defaultFolder` 下一级目录，自定义文件夹输入与建议选择联动
+- 保持网络请求合规：继续使用 `requestUrl`，不回退 Node 内置网络模块
 
 ### 0.1.5
 
