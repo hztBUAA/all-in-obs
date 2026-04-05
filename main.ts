@@ -1,33 +1,21 @@
 import {
-	AbstractInputSuggest,
-	App,
-	Modal,
 	Notice,
 	Plugin,
-	PluginSettingTab,
-	Setting,
-	TFolder,
 	requestUrl,
 } from "obsidian";
-import TurndownService from "turndown";
-import * as http from "http";
-import * as https from "https";
-
-interface ImporterSettings {
-	defaultFolder: string;
-	categories: string[];
-	lastCategory: string;
-	lastCustomFolder: string;
-	downloadMedia: boolean;
-}
-
-interface ImportInput {
-	text: string | null;
-	category: string;
-	downloadMedia: boolean;
-	useCustomFolder: boolean;
-	customFolderPath: string;
-}
+import { ImportSourceModal } from "./src/plugin/import-modal";
+import { ImporterSettingTab } from "./src/plugin/settings-tab";
+import { TextPreviewModal } from "./src/plugin/text-preview-modal";
+import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
+import { runPlatformSmokeSuite, SmokeInputCase, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
+import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
+import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
+import { XhsDebugLogger } from "./src/platforms/xhs/debug-logger";
+import { XhsResolver } from "./src/platforms/xhs/resolver";
+import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
+import { WechatArticleService } from "./src/platforms/wechat/article-service";
+import { buildWechatHeaders } from "./src/platforms/wechat/headers";
+import { WECHAT_SMOKE_CASES } from "./src/platforms/wechat/smoke-cases";
 
 type SupportedPlatform = "wechat" | "xiaohongshu";
 
@@ -41,44 +29,16 @@ interface BatchExtractResult {
 	invalidLines: string[];
 }
 
-interface WechatArticleData {
-	title: string;
-	description: string;
-	source: string;
-	account: string;
-	wechatId: string;
-	alias: string;
-	author: string;
-	publishedAt: string;
-	publishedTs: number;
-	cover: string;
-	type: string;
-	contentHtml: string;
-	contentMarkdown: string;
-	images: string[];
-}
-
-interface XhsNoteData {
-	title: string;
-	source: string;
-	content: string;
-	images: string[];
-	videoUrl: string | null;
-	isVideo: boolean;
-	tags: string[];
-	cover: string;
-}
-
 const DEFAULT_SETTINGS: ImporterSettings = {
 	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
 	lastCustomFolder: "",
 	downloadMedia: true,
+	xhsDebugEnabled: true,
+	xhsSmokeCaseInputs: XHS_SMOKE_CASES.map((item) => item.input),
+	wechatSmokeCaseInputs: WECHAT_SMOKE_CASES.map((item) => item.input),
 };
-
-const WECHAT_REFERER = "https://mp.weixin.qq.com/";
-const CUSTOM_FOLDER_CATEGORY = "自定义文件夹";
 
 interface ImportDestination {
 	categoryName: string;
@@ -87,36 +47,16 @@ interface ImportDestination {
 	customFolderPath: string;
 }
 
-class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
-	constructor(app: App, textInputEl: HTMLInputElement) {
-		super(app, textInputEl);
-		this.limit = 200;
-	}
-
-	getSuggestions(query: string): string[] {
-		const keyword = query.trim().toLowerCase();
-		const folders = this.app.vault.getAllFolders(true).map((folder) => (folder.path ? folder.path : "/"));
-		if (!keyword) {
-			return folders;
-		}
-		return folders.filter((folder) => folder.toLowerCase().includes(keyword));
-	}
-
-	renderSuggestion(value: string, el: HTMLElement): void {
-		el.setText(value === "/" ? "/ (仓库根目录)" : value);
-	}
-
-	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
-		this.setValue(value);
-		this.close();
-	}
-}
-
 export default class MultiSourceImporterPlugin extends Plugin {
 	settings: ImporterSettings;
+	xhsDebugLogger: XhsDebugLogger;
+	xhsResolver: XhsResolver;
+	xhsNoteService: XhsNoteService;
+	wechatArticleService: WechatArticleService;
 
 	async onload() {
 		await this.loadSettings();
+		this.initializeServices();
 
 		this.addRibbonIcon("book", "导入文章（微信 / 小红书）", async () => {
 			await this.handleImportAction();
@@ -130,17 +70,66 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "run-xhs-smoke-tests",
+			name: "运行小红书实网 Smoke 测试",
+			callback: async () => {
+				await this.runXhsSmokeTests();
+			},
+		});
+
+		this.addCommand({
+			id: "run-platform-smoke-tests",
+			name: "运行多平台实网 Smoke 测试",
+			callback: async () => {
+				await this.runPlatformSmokeTests();
+			},
+		});
+
 		this.addSettingTab(new ImporterSettingTab(this.app, this));
+	}
+
+	initializeServices() {
+		this.xhsDebugLogger = new XhsDebugLogger({
+			app: this.app,
+			isEnabled: () => this.settings.xhsDebugEnabled,
+		});
+		this.xhsResolver = new XhsResolver({
+			logger: this.xhsDebugLogger,
+			buildHeaders: () => this.buildXiaohongshuHeaders(),
+		});
+		this.xhsNoteService = new XhsNoteService({
+			buildHeaders: () => this.buildXiaohongshuHeaders(),
+		});
+		this.wechatArticleService = new WechatArticleService();
 	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		this.settings.defaultFolder = this.normalizeVaultPath(this.settings.defaultFolder);
 		this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(this.settings.lastCustomFolder);
+		this.settings.xhsSmokeCaseInputs = this.normalizeSmokeCaseInputs(
+			this.settings.xhsSmokeCaseInputs,
+			DEFAULT_SETTINGS.xhsSmokeCaseInputs
+		);
+		this.settings.wechatSmokeCaseInputs = this.normalizeSmokeCaseInputs(
+			this.settings.wechatSmokeCaseInputs,
+			DEFAULT_SETTINGS.wechatSmokeCaseInputs
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	normalizeSmokeCaseInputs(value: unknown, fallback: string[]): string[] {
+		if (!Array.isArray(value)) {
+			return [...fallback];
+		}
+		const normalized = value
+			.map((item) => (typeof item === "string" ? item.trim() : ""))
+			.filter((item) => !!item);
+		return normalized;
 	}
 
 	async handleImportAction() {
@@ -353,49 +342,11 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return null;
 	}
 
-	normalizeXiaohongshuUrl(url: string): string {
-		const normalized = this.normalizeArticleUrl(url);
-		try {
-			const parsed = new URL(normalized);
-			if (!/xiaohongshu\.com$/i.test(parsed.hostname)) {
-				return normalized;
-			}
-
-			const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/i);
-			if (!match?.[1]) {
-				const normalizedPath = parsed.pathname.replace("/explore/", "/discovery/item/");
-				return `${parsed.origin}${normalizedPath}${parsed.search}`;
-			}
-
-			return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
-		} catch (_error) {
-			return normalized.replace("/explore/", "/discovery/item/");
-		}
-	}
-
 	normalizeArticleUrl(url: string): string {
 		let normalized = url.trim().replace(/&amp;/g, "&");
 		normalized = normalized.replace(/[。！!）)\]】>,，,]+$/, "");
 		normalized = normalized.replace(/#wechat_redirect$/, "");
 		return normalized;
-	}
-
-	buildWechatHeaders(articleUrl: string): Record<string, string> {
-		return {
-			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-			"Referer": WECHAT_REFERER,
-			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-			"Cache-Control": "no-cache",
-			"Sec-Fetch-Site": "none",
-			"Sec-Fetch-Mode": "navigate",
-			"Sec-Fetch-Dest": "document",
-			"X-Requested-With": "XMLHttpRequest",
-			"X-Source-URL": articleUrl,
-		};
-	}
-
-	isVerificationPage(html: string): boolean {
-		return /环境异常|去验证|secitptpage\/template\/verify|TCaptcha|wappoc_appmsgcaptcha/i.test(html);
 	}
 
 	async importWechatArticle(
@@ -408,8 +359,8 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	): Promise<boolean> {
 		try {
 			const normalizedUrl = this.normalizeArticleUrl(url);
-			const html = await this.fetchWechatHtml(normalizedUrl);
-			const article = this.extractWechatArticle(normalizedUrl, html);
+			const html = await this.wechatArticleService.fetchHtml(normalizedUrl);
+			const article = this.wechatArticleService.extractArticle(normalizedUrl, html);
 
 			if (!article.contentHtml.trim()) {
 				throw new Error("未提取到正文内容");
@@ -436,16 +387,16 @@ export default class MultiSourceImporterPlugin extends Plugin {
 					mediaFolder,
 					safeMediaTitle,
 					relativeMediaPrefix,
-					headers: this.buildWechatHeaders(normalizedUrl),
+					headers: buildWechatHeaders(normalizedUrl),
 				});
 			}
 
-			article.contentMarkdown = this.convertHtmlToMarkdown(article.contentHtml, imageMap);
+			article.contentMarkdown = this.wechatArticleService.convertHtmlToMarkdown(article.contentHtml, imageMap);
 
 			const normalizedCover = this.normalizeMediaUrl(article.cover);
 			const finalCover = normalizedCover ? (imageMap.get(normalizedCover) ?? normalizedCover) : "";
 
-			const frontmatter = this.buildWechatFrontmatter(article, categoryName, finalCover);
+			const frontmatter = this.wechatArticleService.buildFrontmatter(article, categoryName, finalCover);
 			const markdown = `${frontmatter}\n# ${article.title}\n\n${article.contentMarkdown}\n`;
 
 			const filePath = await this.getUniqueNotePath(folderPath, safeTitle);
@@ -472,25 +423,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 	}
 
-	async fetchWechatHtml(url: string): Promise<string> {
-		const response = await requestUrl({
-			url,
-			method: "GET",
-			headers: this.buildWechatHeaders(url),
-			throw: false,
-		});
-
-		if (response.status >= 400) {
-			throw new Error(`请求失败（HTTP ${response.status}）`);
-		}
-
-		if (this.isVerificationPage(response.text)) {
-			throw new Error("微信返回了验证页面（环境异常/去验证），请稍后重试或更换网络环境。");
-		}
-
-		return response.text;
-	}
-
 	buildXiaohongshuHeaders(): Record<string, string> {
 		return {
 			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -508,9 +440,12 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		silent = false
 	): Promise<boolean> {
 		try {
-			const resolvedUrl = await this.resolveXiaohongshuUrl(url);
-			const html = await this.fetchXiaohongshuHtml(resolvedUrl);
-			const note = this.extractXhsNoteData(resolvedUrl, html);
+			await this.xhsDebugLogger.reset(url);
+			await this.xhsDebugLogger.append("import-start", { inputUrl: url });
+			const resolvedUrl = await this.xhsResolver.resolve(url);
+			await this.xhsDebugLogger.append("import-resolved-url", { resolvedUrl });
+			const html = await this.xhsNoteService.fetchHtml(resolvedUrl);
+			const note = this.xhsNoteService.extractNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
 
 			const destination = this.resolveImportDestination(category, useCustomFolder, customFolderPath);
@@ -599,6 +534,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			await this.xhsDebugLogger.append("import-error", { message });
 			console.error("Failed to import Xiaohongshu note:", error);
 			if (!silent) {
 				new Notice(`导入失败：${message}`);
@@ -607,242 +543,146 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 	}
 
-	async fetchXiaohongshuHtml(url: string): Promise<string> {
-		const response = await requestUrl({
-			url,
-			method: "GET",
-			headers: this.buildXiaohongshuHeaders(),
-			throw: false,
+	getXhsDebugLogPath(): string {
+		return this.xhsDebugLogger.getLogPath();
+	}
+
+	getXhsSmokeReportPath(): string {
+		return XHS_SMOKE_REPORT_PATH;
+	}
+
+	getSmokeCasesText(platform: SupportedSmokePlatform): string {
+		const inputs = platform === "xiaohongshu" ? this.settings.xhsSmokeCaseInputs : this.settings.wechatSmokeCaseInputs;
+		return inputs.join("\n");
+	}
+
+	async setSmokeCasesText(platform: SupportedSmokePlatform, rawText: string): Promise<void> {
+		const parsed = this.normalizeSmokeCaseInputs(rawText.split(/\r?\n/), []);
+		if (platform === "xiaohongshu") {
+			this.settings.xhsSmokeCaseInputs = parsed;
+		} else {
+			this.settings.wechatSmokeCaseInputs = parsed;
+		}
+		await this.saveSettings();
+	}
+
+	async openSmokeReportFile(): Promise<void> {
+		await this.showTextPreviewModal(
+			"Smoke 报告",
+			this.getXhsSmokeReportPath(),
+			`${JSON.stringify({ message: "Smoke report has not been generated yet." }, null, 2)}\n`
+		);
+	}
+
+	async openXhsDebugLogFile(): Promise<void> {
+		await this.showTextPreviewModal("XHS 调试日志", this.getXhsDebugLogPath(), "");
+	}
+
+	async readSmokeReportSummary(): Promise<string> {
+		const reportPath = this.getXhsSmokeReportPath();
+		if (!(await this.app.vault.adapter.exists(reportPath))) {
+			return `报告不存在：${reportPath}`;
+		}
+
+		try {
+			const text = await this.app.vault.adapter.read(reportPath);
+			const report = JSON.parse(text) as {
+				finishedAt?: string;
+				caseCount?: number;
+				successCount?: number;
+				failedCount?: number;
+				platformSummary?: {
+					wechat?: { caseCount?: number; successCount?: number };
+					xiaohongshu?: { caseCount?: number; successCount?: number };
+				};
+				results?: Array<{
+					platform?: string;
+					name?: string;
+					status?: string;
+					error?: string;
+				}>;
+			};
+
+			const lines: string[] = [];
+			lines.push(`报告路径: ${reportPath}`);
+			lines.push(`完成时间: ${report.finishedAt || "unknown"}`);
+			lines.push(`总计: ${report.successCount ?? 0}/${report.caseCount ?? 0} 成功, 失败 ${report.failedCount ?? 0}`);
+			lines.push(
+				`XHS: ${report.platformSummary?.xiaohongshu?.successCount ?? 0}/${report.platformSummary?.xiaohongshu?.caseCount ?? 0}`
+			);
+			lines.push(
+				`Wechat: ${report.platformSummary?.wechat?.successCount ?? 0}/${report.platformSummary?.wechat?.caseCount ?? 0}`
+			);
+
+			const failed = (report.results || []).filter((item) => item.status !== "success");
+			if (failed.length > 0) {
+				lines.push("");
+				lines.push("失败用例:");
+				for (const item of failed.slice(0, 8)) {
+					lines.push(`[${item.platform || "unknown"}] ${item.name || "unnamed"} -> ${item.error || "unknown error"}`);
+				}
+			}
+
+			return lines.join("\n");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return `读取报告失败: ${message}`;
+		}
+	}
+
+	async showTextPreviewModal(title: string, path: string, defaultContent: string): Promise<void> {
+		const normalizedPath = path.trim().replace(/^\/+/, "");
+		if (!normalizedPath) {
+			new Notice("文件路径无效。");
+			return;
+		}
+
+		const folderPath = normalizedPath.includes("/") ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/")) : "";
+		if (folderPath) {
+			await this.ensureFolder(folderPath);
+		}
+
+		if (!(await this.app.vault.adapter.exists(normalizedPath))) {
+			await this.app.vault.adapter.write(normalizedPath, defaultContent);
+		}
+
+		const content = await this.app.vault.adapter.read(normalizedPath);
+		new TextPreviewModal(this.app, title, normalizedPath, content).open();
+	}
+
+	buildSmokeInputCases(platform: SupportedSmokePlatform): SmokeInputCase[] {
+		const inputs = platform === "xiaohongshu" ? this.settings.xhsSmokeCaseInputs : this.settings.wechatSmokeCaseInputs;
+		const prefix = platform === "xiaohongshu" ? "XHS" : "Wechat";
+		return inputs.map((input, index) => {
+			const compact = input.replace(/\s+/g, " ").trim();
+			const shortName = compact.slice(0, 20) || `${prefix}-${index + 1}`;
+			return {
+				name: `${prefix}-${index + 1}: ${shortName}`,
+				input,
+			};
 		});
-
-		if (response.status >= 400) {
-			throw new Error(`请求失败（HTTP ${response.status}）`);
-		}
-
-		if (this.isXhsUnavailablePage(response.text)) {
-			throw new Error("小红书笔记不可访问，可能已删除、无权限访问，或需要保留分享链接中的 xsec_token 参数。");
-		}
-
-		return response.text;
 	}
 
-	async resolveXiaohongshuUrl(url: string): Promise<string> {
-		const normalized = this.normalizeArticleUrl(url);
-		if (!/xhslink\.com/i.test(normalized)) {
-			return this.normalizeXiaohongshuUrl(normalized);
-		}
-
-		try {
-			const response = await requestUrl({
-				url: normalized,
-				method: "GET",
-				headers: this.buildXiaohongshuHeaders(),
-				throw: false,
-			});
-
-			const location = response.headers.location || response.headers.Location;
-			if (location) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
-			}
-
-			const match = response.text.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			if (match?.[0]) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
-			}
-		} catch (_error) {
-			// Fall through to fetch() fallback below when Electron's network stack blocks the short link.
-		}
-
-		const fallback = await this.resolveXiaohongshuUrlWithFetch(normalized);
-		if (fallback) {
-			return fallback;
-		}
-
-		const nodeFallback = await this.resolveXiaohongshuUrlWithNode(normalized);
-		if (nodeFallback) {
-			return nodeFallback;
-		}
-
-		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
+	async runXhsSmokeTests(): Promise<void> {
+		await this.runPlatformSmokeTests(["xiaohongshu"]);
 	}
 
-	async resolveXiaohongshuUrlWithFetch(url: string): Promise<string | null> {
-		try {
-			const response = await fetch(url, {
-				method: "GET",
-				headers: this.buildXiaohongshuHeaders(),
-				redirect: "manual",
-			});
-			const location = response.headers.get("location");
-			if (location) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
-			}
-
-			const html = await response.text();
-			const match = html.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	async resolveXiaohongshuUrlWithNode(url: string, redirects = 0): Promise<string | null> {
-		if (redirects > 5) {
-			return null;
-		}
-
-		try {
-			const parsed = new URL(url);
-			const client = parsed.protocol === "http:" ? http : https;
-
-			const response = await new Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined>; body: string }>(
-				(resolve, reject) => {
-					const request = client.request(
-						url,
-						{
-							method: "GET",
-							headers: this.buildXiaohongshuHeaders(),
-						},
-						(res) => {
-							const chunks: Buffer[] = [];
-							res.on("data", (chunk) => {
-								chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-							});
-							res.on("end", () => {
-								resolve({
-									statusCode: res.statusCode ?? 0,
-									headers: res.headers,
-									body: Buffer.concat(chunks).toString("utf8"),
-								});
-							});
-						}
-					);
-
-					request.on("error", reject);
-					request.end();
-				}
-			);
-
-			const locationHeader = response.headers.location;
-			const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
-			if (location) {
-				const nextUrl = new URL(location, url).toString();
-				if (/xhslink\.com/i.test(nextUrl)) {
-					return this.resolveXiaohongshuUrlWithNode(nextUrl, redirects + 1);
-				}
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(nextUrl));
-			}
-
-			const match = response.body.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	isXhsUnavailablePage(html: string): boolean {
-		return /<title>\s*小红书\s*-\s*你访问的页面不见了\s*<\/title>/i.test(html);
-	}
-
-	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
-		const titleMatch = html.match(/<title>(.*?)<\/title>/);
-		const title = titleMatch?.[1]?.replace(" - 小红书", "").trim() || "Untitled Xiaohongshu Note";
-		const state = this.parseXhsState(html);
-		const note = state ? this.getXhsNoteObject(state) : null;
-
-		const images = this.extractXhsImages(note);
-		const videoUrl = this.extractXhsVideoUrl(note);
-		const isVideo = note?.type === "video";
-
-		const contentFromHtml = html.match(/<div id="detail-desc" class="desc">([\s\S]*?)<\/div>/)?.[1] || "";
-		const content = this.extractXhsContent(note, contentFromHtml);
-		const tags = this.extractXhsTags(content);
-		const normalizedContent = content
-			.replace(/#[^#\s]*(?:\s+#[^#\s]*)*\s*/g, "")
-			.trim();
-
-		return {
-			title,
-			source: sourceUrl,
-			content: normalizedContent,
-			images,
-			videoUrl,
-			isVideo,
-			tags,
-			cover: images[0] || "",
-		};
-	}
-
-	parseXhsState(html: string): any | null {
-		const stateMatch = html.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/s);
-		if (!stateMatch?.[1]) {
-			return null;
-		}
-
-		try {
-			const jsonStr = stateMatch[1].trim();
-			const cleanedJson = jsonStr.replace(/undefined/g, "null");
-			return JSON.parse(cleanedJson);
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	getXhsNoteObject(state: any): any | null {
-		try {
-			const map = state?.note?.noteDetailMap;
-			if (!map || typeof map !== "object") {
-				return null;
-			}
-			const noteId = Object.keys(map)[0];
-			return map[noteId]?.note ?? null;
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	extractXhsImages(note: any): string[] {
-		const list = Array.isArray(note?.imageList) ? note.imageList : [];
-		return list
-			.map((img: any) => this.normalizeMediaUrl(img?.urlDefault || ""))
-			.filter((url: string) => !!url);
-	}
-
-	extractXhsVideoUrl(note: any): string | null {
-		const stream = note?.video?.media?.stream;
-		const h264 = Array.isArray(stream?.h264) ? stream.h264 : [];
-		const h265 = Array.isArray(stream?.h265) ? stream.h265 : [];
-		const picked = h264[0]?.masterUrl || h265[0]?.masterUrl || "";
-		const normalized = this.normalizeMediaUrl(picked);
-		return normalized || null;
-	}
-
-	extractXhsContent(note: any, contentFromHtml: string): string {
-		const htmlText = contentFromHtml
-			.replace(/<[^>]+>/g, "")
-			.replace(/\[话题\]/g, "")
-			.replace(/\[[^\]]+\]/g, "")
-			.trim();
-		if (htmlText) {
-			return htmlText;
-		}
-
-		const desc = (note?.desc || "")
-			.replace(/\[话题\]/g, "")
-			.replace(/\[[^\]]+\]/g, "")
-			.trim();
-		return desc;
-	}
-
-	extractXhsTags(content: string): string[] {
-		const matches = content.match(/#\S+/g) || [];
-		return matches.map((tag) => tag.replace(/^#/, "").trim()).filter((tag) => !!tag);
+	async runPlatformSmokeTests(platforms: SupportedSmokePlatform[] = ["wechat", "xiaohongshu"]): Promise<void> {
+		const result = await runPlatformSmokeSuite({
+			app: this.app,
+			pluginVersion: this.manifest.version,
+			reportPath: this.getXhsSmokeReportPath(),
+			platforms,
+			xhsDebugLogger: this.xhsDebugLogger,
+			xhsResolver: this.xhsResolver,
+			xhsNoteService: this.xhsNoteService,
+			wechatArticleService: this.wechatArticleService,
+			extractXhsUrl: (input) => this.extractXiaohongshuUrl(input),
+			extractWechatUrl: (input) => this.extractWechatUrl(input),
+			xhsCases: this.buildSmokeInputCases("xiaohongshu"),
+			wechatCases: this.buildSmokeInputCases("wechat"),
+		});
+		new Notice(`平台 Smoke 测试完成：成功 ${result.successCount}，失败 ${result.failedCount}。报告：${result.reportPath}`);
 	}
 
 	buildXhsFrontmatter(note: XhsNoteData, category: string, cover: string): string {
@@ -859,294 +699,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			"---",
 		];
 		return rows.join("\n");
-	}
-
-	extractWechatArticle(sourceUrl: string, html: string): WechatArticleData {
-		const cgiSegment = this.extractCgiDataSegment(html);
-
-		const title = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "title")),
-			this.decodeJsEscapedString(this.extractVarSingleQuoted(html, "msg_title", "\\.html\\(false\\)")),
-			this.extractMetaContent(html, "property", "og:title"),
-			this.extractTitleTag(html),
-		]) || "Untitled WeChat Article";
-
-		const description = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "desc")),
-			this.decodeJsEscapedString(this.extractVarHtmlDecodeDoubleQuoted(html, "msg_desc")),
-			this.extractMetaContent(html, "name", "description"),
-		]) || "";
-
-		const account = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "nick_name")),
-			this.decodeJsEscapedString(this.extractVarHtmlDecodeDoubleQuoted(html, "nickname")),
-		]) || "";
-
-		const wechatId = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "user_name")),
-			this.decodeJsEscapedString(this.extractVarDoubleQuoted(html, "user_name")),
-		]) || "";
-
-		const alias = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "alias")),
-			this.decodeJsEscapedString(this.extractWindowDoubleQuoted(html, "alias")),
-		]) || "";
-
-		const author = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "author")),
-			this.decodeJsEscapedString(this.extractVarDoubleQuoted(html, "author")),
-		]) || "";
-
-		const publishedAtRaw = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "create_time")),
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "ori_create_time")),
-		]) || "";
-
-		const publishedTs = this.pickNumber([
-			this.extractNumericProp(cgiSegment, "ori_create_time"),
-			this.extractNumericVar(html, "ct"),
-			this.extractNumericVar(html, "create_time"),
-		]);
-
-		const publishedAt = publishedAtRaw || (publishedTs > 0 ? this.formatUnixTime(publishedTs) : "");
-
-		const cover = this.pickFirst([
-			this.decodeJsDecodeValue(this.extractJsDecodeProp(cgiSegment, "cdn_url")),
-			this.decodeJsEscapedString(this.extractVarDoubleQuoted(html, "msg_cdn_url")),
-			this.extractMetaContent(html, "property", "og:image"),
-		]) || "";
-
-		const type = this.pickFirst([
-			this.extractNumericType(cgiSegment),
-			this.decodeJsEscapedString(this.extractVarDoubleQuoted(html, "appmsg_type")),
-		]) || "article";
-
-		let contentHtml = this.extractJsContentHtml(html);
-		if (!contentHtml) {
-			contentHtml = this.decodeJsDecodeValue(this.extractContentNoEncode(cgiSegment));
-		}
-		contentHtml = this.cleanContentHtml(contentHtml);
-
-		const images = this.extractImageUrlsFromContent(contentHtml, cover);
-
-		return {
-			title: this.cleanText(title),
-			description: this.cleanText(description),
-			source: sourceUrl,
-			account: this.cleanText(account),
-			wechatId: this.cleanText(wechatId),
-			alias: this.cleanText(alias),
-			author: this.cleanText(author),
-			publishedAt: this.cleanText(publishedAt),
-			publishedTs,
-			cover: this.normalizeMediaUrl(cover),
-			type: this.cleanText(type),
-			contentHtml,
-			contentMarkdown: "",
-			images,
-		};
-	}
-
-	extractCgiDataSegment(html: string): string {
-		const marker = "window.cgiDataNew";
-		const startIndex = html.indexOf(marker);
-		if (startIndex < 0) {
-			return html;
-		}
-
-		const maxLength = 650000;
-		return html.slice(startIndex, startIndex + maxLength);
-	}
-
-	extractJsDecodeProp(text: string, prop: string): string {
-		const escaped = prop.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`${escaped}\\s*:\\s*JsDecode\\('([\\s\\S]*?)'\\)`);
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractVarDoubleQuoted(text: string, variableName: string): string {
-		const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`var\\s+${escaped}\\s*=\\s*"([\\s\\S]*?)"`);
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractWindowDoubleQuoted(text: string, variableName: string): string {
-		const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`window\\.${escaped}\\s*=\\s*"([\\s\\S]*?)"`);
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractVarSingleQuoted(text: string, variableName: string, suffixPattern = ""): string {
-		const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`var\\s+${escaped}\\s*=\\s*'([\\s\\S]*?)'${suffixPattern}`);
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractVarHtmlDecodeDoubleQuoted(text: string, variableName: string): string {
-		const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`var\\s+${escaped}\\s*=\\s*htmlDecode\\("([\\s\\S]*?)"\\)`);
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractNumericVar(text: string, variableName: string): number {
-		const escaped = variableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`var\\s+${escaped}\\s*=\\s*"?(\\d{8,13})"?`);
-		const value = regex.exec(text)?.[1] ?? "";
-		return this.toNumber(value);
-	}
-
-	extractNumericProp(text: string, propName: string): number {
-		const escaped = propName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`${escaped}\\s*:\\s*'?(\\d{8,13})'?\\s*\\*?\\s*1?`);
-		const value = regex.exec(text)?.[1] ?? "";
-		return this.toNumber(value);
-	}
-
-	extractNumericType(text: string): string {
-		const regex = /type\s*:\s*'?(\d+)'?\s*\*\s*1/;
-		return regex.exec(text)?.[1] ?? "";
-	}
-
-	extractMetaContent(html: string, attrName: string, attrValue: string): string {
-		const escaped = attrValue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		const regex = new RegExp(`<meta\\s+${attrName}=["']${escaped}["']\\s+content=["']([^"']*)["']`, "i");
-		return this.decodeHtmlEntities(regex.exec(html)?.[1] ?? "");
-	}
-
-	extractTitleTag(html: string): string {
-		const match = html.match(/<title>([\s\S]*?)<\/title>/i);
-		if (!match?.[1]) {
-			return "";
-		}
-		return this.decodeHtmlEntities(match[1]).replace(/\s*-\s*微信公众平台\s*$/, "").trim();
-	}
-
-	extractContentNoEncode(segment: string): string {
-		const match = segment.match(/content_noencode\s*:\s*JsDecode\('([\s\S]*?)'\),\s*create_time\s*:/);
-		return match?.[1] ?? "";
-	}
-
-	extractJsContentHtml(html: string): string {
-		try {
-			const doc = new DOMParser().parseFromString(html, "text/html");
-			const contentEl = doc.querySelector("#js_content");
-			return contentEl?.innerHTML ?? "";
-		} catch (_error) {
-			return "";
-		}
-	}
-
-	cleanContentHtml(contentHtml: string): string {
-		if (!contentHtml) {
-			return "";
-		}
-
-		try {
-			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
-			const root = doc.querySelector("#wechat-root");
-			if (!root) {
-				return contentHtml;
-			}
-
-			root.querySelectorAll("script, style, noscript, iframe").forEach((node) => node.remove());
-			root.querySelectorAll("mp-style-type").forEach((node) => node.remove());
-			root.querySelectorAll("img").forEach((img) => {
-				const dataSrc = this.normalizeMediaUrl(img.getAttribute("data-src") || "");
-				const src = this.normalizeMediaUrl(img.getAttribute("src") || "");
-				if (!img.getAttribute("src") && dataSrc) {
-					img.setAttribute("src", dataSrc);
-				}
-				if (src && src !== img.getAttribute("src")) {
-					img.setAttribute("src", src);
-				}
-			});
-
-			return root.innerHTML;
-		} catch (_error) {
-			return contentHtml;
-		}
-	}
-
-	extractImageUrlsFromContent(contentHtml: string, coverUrl: string): string[] {
-		const urls = new Set<string>();
-		const cover = this.normalizeMediaUrl(coverUrl);
-		if (cover) {
-			urls.add(cover);
-		}
-
-		if (!contentHtml) {
-			return Array.from(urls);
-		}
-
-		try {
-			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
-			doc.querySelectorAll("img").forEach((img) => {
-				const rawUrl = img.getAttribute("data-src") || img.getAttribute("src") || "";
-				const normalized = this.normalizeMediaUrl(rawUrl);
-				if (normalized) {
-					urls.add(normalized);
-				}
-			});
-		} catch (_error) {
-			const pattern = /<img\b[^>]*?(?:data-src|src)=['"]([^'"]+)['"][^>]*>/gi;
-			let match: RegExpExecArray | null = pattern.exec(contentHtml);
-			while (match) {
-				const normalized = this.normalizeMediaUrl(match[1]);
-				if (normalized) {
-					urls.add(normalized);
-				}
-				match = pattern.exec(contentHtml);
-			}
-		}
-
-		return Array.from(urls);
-	}
-
-	convertHtmlToMarkdown(contentHtml: string, imageMap: Map<string, string>): string {
-		const turndown = new TurndownService({
-			headingStyle: "atx",
-			codeBlockStyle: "fenced",
-			emDelimiter: "_",
-			bulletListMarker: "-",
-		});
-
-		const resolveImage = (raw: string): string => {
-			const normalized = this.normalizeMediaUrl(raw);
-			if (!normalized) {
-				return "";
-			}
-			return imageMap.get(normalized) ?? normalized;
-		};
-
-		turndown.addRule("wechatImage", {
-			filter: "img",
-			replacement: (_content, node) => {
-				const el = node as HTMLElement;
-				const rawUrl = el.getAttribute("data-src") || el.getAttribute("src") || "";
-				const finalUrl = resolveImage(rawUrl);
-				if (!finalUrl) {
-					return "";
-				}
-				const alt = (el.getAttribute("alt") || "Image").replace(/\s+/g, " ").trim() || "Image";
-				const destination = this.toMarkdownDestination(finalUrl);
-				return `![${alt}](${destination})`;
-			},
-		});
-
-		turndown.addRule("removeSvg", {
-			filter: "svg",
-			replacement: () => "",
-		});
-
-		turndown.addRule("removeStyleTags", {
-			filter: ["style", "script", "noscript"],
-			replacement: () => "",
-		});
-
-		let markdown = turndown.turndown(contentHtml || "");
-		markdown = this.normalizeMarkdownSpacing(markdown);
-
-		return markdown;
 	}
 
 	async buildImageMap(
@@ -1263,32 +815,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return ".jpg";
 	}
 
-	buildWechatFrontmatter(article: WechatArticleData, category: string, cover: string): string {
-		const importedAt = this.formatDateTime(new Date());
-		const publishedTs = article.publishedTs > 0 ? String(article.publishedTs) : "0";
-
-		const rows = [
-			"---",
-			`platform: ${this.toYamlString("wechat")}`,
-			`title: ${this.toYamlString(article.title)}`,
-			`source: ${this.toYamlString(article.source)}`,
-			`account: ${this.toYamlString(article.account)}`,
-			`wechat_id: ${this.toYamlString(article.wechatId)}`,
-			`alias: ${this.toYamlString(article.alias)}`,
-			`author: ${this.toYamlString(article.author)}`,
-			`published_at: ${this.toYamlString(article.publishedAt)}`,
-			`published_ts: ${publishedTs}`,
-			`imported_at: ${this.toYamlString(importedAt)}`,
-			`category: ${this.toYamlString(category)}`,
-			`description: ${this.toYamlString(article.description)}`,
-			`cover: ${this.toYamlString(cover)}`,
-			`type: ${this.toYamlString(article.type)}`,
-			"---",
-		];
-
-		return rows.join("\n");
-	}
-
 	toYamlString(value: string): string {
 		const safe = (value || "")
 			.replace(/\\/g, "\\\\")
@@ -1305,13 +831,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		const minute = String(date.getMinutes()).padStart(2, "0");
 		const second = String(date.getSeconds()).padStart(2, "0");
 		return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
-	}
-
-	formatUnixTime(unixSeconds: number): string {
-		if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
-			return "";
-		}
-		return this.formatDateTime(new Date(unixSeconds * 1000));
 	}
 
 	sanitizePathSegment(value: string, fallback: string): string {
@@ -1423,24 +942,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return normalized.trim();
 	}
 
-	decodeJsDecodeValue(value: string): string {
-		if (!value) {
-			return "";
-		}
-
-		const decoded = value
-			.replace(/\\x([0-9A-Fa-f]{2})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)))
-			.replace(/\\u([0-9A-Fa-f]{4})/g, (_match, hex) => String.fromCharCode(parseInt(hex, 16)))
-			.replace(/\\r/g, "\r")
-			.replace(/\\n/g, "\n")
-			.replace(/\\t/g, "\t")
-			.replace(/\\'/g, "'")
-			.replace(/\\"/g, '"')
-			.replace(/\\\\/g, "\\");
-
-		return this.decodeHtmlEntities(decoded);
-	}
-
 	decodeJsEscapedString(value: string): string {
 		if (!value) {
 			return "";
@@ -1481,305 +982,5 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			}
 			return named[token] ?? _all;
 		});
-	}
-
-	cleanText(value: string): string {
-		return value.replace(/\s+/g, " ").trim();
-	}
-
-	pickFirst(values: Array<string | null | undefined>): string {
-		for (const item of values) {
-			if (item && item.trim()) {
-				return item.trim();
-			}
-		}
-		return "";
-	}
-
-	pickNumber(values: number[]): number {
-		for (const value of values) {
-			if (Number.isFinite(value) && value > 0) {
-				return value;
-			}
-		}
-		return 0;
-	}
-
-	toNumber(value: string): number {
-		const parsed = Number(value);
-		if (!Number.isFinite(parsed)) {
-			return 0;
-		}
-		return parsed;
-	}
-}
-
-class ImporterSettingTab extends PluginSettingTab {
-	plugin: MultiSourceImporterPlugin;
-
-	constructor(app: App, plugin: MultiSourceImporterPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName("默认文件夹")
-			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
-			.addText((text) =>
-				text
-					.setPlaceholder("External Files")
-					.setValue(this.plugin.settings.defaultFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.defaultFolder = this.plugin.normalizeVaultPath(value);
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("默认下载图片")
-			.setDesc("开启后导入时默认下载正文图片到本地 media 目录。")
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.downloadMedia).onChange(async (value) => {
-					this.plugin.settings.downloadMedia = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl).setName("分类管理").setHeading();
-		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });
-
-		this.plugin.settings.categories.forEach((category, index) => {
-			const setting = new Setting(containerEl)
-				.setName(`分类 ${index + 1}`)
-				.addText((text) =>
-					text.setValue(category).onChange(async (value) => {
-						this.plugin.settings.categories[index] = value.trim() || "未命名分类";
-						await this.plugin.saveSettings();
-					})
-				);
-
-			setting.addButton((button) =>
-				button
-					.setIcon("arrow-up")
-					.setTooltip("上移")
-					.setDisabled(index === 0)
-					.onClick(async () => {
-						if (index > 0) {
-							[this.plugin.settings.categories[index - 1], this.plugin.settings.categories[index]] = [
-								this.plugin.settings.categories[index],
-								this.plugin.settings.categories[index - 1],
-							];
-							await this.plugin.saveSettings();
-							this.display();
-						}
-					})
-			);
-
-			setting.addButton((button) =>
-				button
-					.setIcon("arrow-down")
-					.setTooltip("下移")
-					.setDisabled(index === this.plugin.settings.categories.length - 1)
-					.onClick(async () => {
-						if (index < this.plugin.settings.categories.length - 1) {
-							[this.plugin.settings.categories[index], this.plugin.settings.categories[index + 1]] = [
-								this.plugin.settings.categories[index + 1],
-								this.plugin.settings.categories[index],
-							];
-							await this.plugin.saveSettings();
-							this.display();
-						}
-					})
-			);
-
-			setting.addButton((button) =>
-				button
-					.setButtonText("删除")
-					.onClick(async () => {
-						const removed = this.plugin.settings.categories[index];
-						this.plugin.settings.categories.splice(index, 1);
-						if (this.plugin.settings.lastCategory === removed) {
-							this.plugin.settings.lastCategory = "";
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-		});
-
-		new Setting(containerEl).addButton((button) =>
-			button.setButtonText("新增分类").onClick(async () => {
-				this.plugin.settings.categories.push("新分类");
-				await this.plugin.saveSettings();
-				this.display();
-			})
-		);
-	}
-}
-
-class ImportSourceModal extends Modal {
-	result: ImportInput | null = null;
-	onSubmit: (result: ImportInput | null) => void;
-	settings: ImporterSettings;
-	selectedCategory: string;
-	downloadMedia: boolean;
-	customFolderPath: string;
-
-	constructor(app: App, settings: ImporterSettings, onSubmit: (result: ImportInput | null) => void) {
-		super(app);
-		this.settings = settings;
-		this.onSubmit = onSubmit;
-		this.selectedCategory = this.resolveInitialCategory();
-		this.downloadMedia = this.settings.downloadMedia;
-		this.customFolderPath = this.settings.lastCustomFolder || this.settings.defaultFolder || "";
-	}
-
-	resolveInitialCategory(): string {
-		if (this.settings.lastCategory === "其他") {
-			return "其他";
-		}
-		if (this.settings.lastCategory === CUSTOM_FOLDER_CATEGORY && this.settings.lastCustomFolder) {
-			return CUSTOM_FOLDER_CATEGORY;
-		}
-		if (this.settings.lastCategory && this.settings.categories.includes(this.settings.lastCategory)) {
-			return this.settings.lastCategory;
-		}
-		return this.settings.categories[0] || "其他";
-	}
-
-	normalizeCustomFolderInput(path: string): string | null {
-		const trimmed = path.trim();
-		if (!trimmed) {
-			return null;
-		}
-		const normalized = trimmed.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
-		if (/^\/+$/.test(normalized)) {
-			return "/";
-		}
-		const cleaned = normalized.replace(/^\/+|\/+$/g, "");
-		return cleaned || null;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.addClass("wca-modal-content");
-
-		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
-
-		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本（支持按行批量导入）：" });
-		const input = inputRow.createEl("textarea", {
-			cls: "wca-modal-textarea",
-			attr: {
-				placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
-			},
-		});
-
-		const categoryRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		categoryRow.createEl("p", { text: "选择分类：" });
-		const chipContainer = categoryRow.createEl("div", { cls: "wca-chip-container" });
-		const customFolderRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-custom-folder-row"] });
-		customFolderRow.createEl("p", { text: "自定义文件夹：" });
-		const customFolderInput = customFolderRow.createEl("input", {
-			cls: "wca-custom-folder-input",
-			attr: {
-				type: "text",
-				placeholder: "例如：Projects/Clippings（输入 / 表示仓库根目录）",
-			},
-		});
-		customFolderInput.value = this.customFolderPath;
-		customFolderInput.addEventListener("input", () => {
-			this.customFolderPath = customFolderInput.value;
-		});
-		new VaultFolderPathSuggest(this.app, customFolderInput);
-
-		const categoryList = [...this.settings.categories, "其他", CUSTOM_FOLDER_CATEGORY];
-		const updateCustomFolderRow = () => {
-			customFolderRow.style.display = this.selectedCategory === CUSTOM_FOLDER_CATEGORY ? "flex" : "none";
-		};
-		const renderChips = () => {
-			chipContainer.empty();
-			categoryList.forEach((category) => {
-				const chip = chipContainer.createEl("button", {
-					text: category,
-					cls: "wca-chip",
-				});
-				if (category === this.selectedCategory) {
-					chip.addClass("wca-chip--selected");
-				}
-				chip.addEventListener("click", () => {
-					this.selectedCategory = category;
-					renderChips();
-					updateCustomFolderRow();
-				});
-			});
-		};
-		renderChips();
-		updateCustomFolderRow();
-
-		const downloadRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-download-row"] });
-		const downloadWrap = downloadRow.createEl("div", { cls: "wca-download-wrapper" });
-		const checkboxId = "wca-download-media-checkbox";
-		const checkbox = downloadWrap.createEl("input", { attr: { type: "checkbox", id: checkboxId } });
-		checkbox.checked = this.downloadMedia;
-		checkbox.addEventListener("change", () => {
-			this.downloadMedia = checkbox.checked;
-		});
-		downloadWrap.createEl("label", {
-			text: "本次导入下载图片到本地",
-			attr: { for: checkboxId },
-			cls: "wca-download-label",
-		});
-
-		const buttonRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-button-row"] });
-		const importButton = buttonRow.createEl("button", {
-			text: "导入",
-			cls: "wca-submit-button",
-		});
-
-		const submit = () => {
-			const useCustomFolder = this.selectedCategory === CUSTOM_FOLDER_CATEGORY;
-			let customFolderPath = "";
-			if (useCustomFolder) {
-				const normalizedPath = this.normalizeCustomFolderInput(this.customFolderPath);
-				if (!normalizedPath) {
-					new Notice("请选择自定义文件夹路径。");
-					return;
-				}
-				const vaultPath = normalizedPath === "/" ? "" : normalizedPath;
-				const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
-				if (abstractFile && !(abstractFile instanceof TFolder)) {
-					new Notice("该路径是文件，请改为文件夹路径。");
-					return;
-				}
-				customFolderPath = normalizedPath;
-			}
-
-			this.result = {
-				text: input.value.trim(),
-				category: this.selectedCategory,
-				downloadMedia: this.downloadMedia,
-				useCustomFolder,
-				customFolderPath,
-			};
-			this.close();
-		};
-
-		importButton.addEventListener("click", submit);
-		input.addEventListener("keypress", (event) => {
-			if (event.key === "Enter" && !event.shiftKey) {
-				event.preventDefault();
-				submit();
-			}
-		});
-	}
-
-	onClose() {
-		this.onSubmit(this.result);
 	}
 }

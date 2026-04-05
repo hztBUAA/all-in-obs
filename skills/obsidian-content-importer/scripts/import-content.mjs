@@ -391,23 +391,220 @@ async function resolveXiaohongshuUrl(url) {
 		return normalizeXiaohongshuUrl(normalized);
 	}
 
-	const response = await fetch(normalized, {
-		method: "GET",
-		headers: buildXiaohongshuHeaders(),
-		redirect: "manual",
-	});
-	const location = response.headers.get("location");
-	if (location) {
-		return normalizeXiaohongshuUrl(decodeHtmlEntities(location));
-	}
-
-	const html = await response.text();
-	const match = html.match(/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i);
-	if (!match?.[0]) {
+	const resolvedUrl = await resolveXiaohongshuShortLink(normalizeXhsShortLinkUrl(normalized));
+	if (!resolvedUrl) {
 		throw new Error("Failed to resolve Xiaohongshu short link.");
 	}
+	return resolvedUrl;
+}
 
-	return normalizeXiaohongshuUrl(decodeHtmlEntities(match[0]));
+async function resolveXiaohongshuShortLink(url, redirects = 0) {
+	if (redirects > 5) {
+		return null;
+	}
+
+	const attemptUrls = buildXhsShortLinkAttemptUrls(url);
+	for (const attemptUrl of attemptUrls) {
+		try {
+			const response = await fetch(attemptUrl, {
+				method: "GET",
+				headers: buildXiaohongshuHeaders(),
+				redirect: "manual",
+			});
+			const location = response.headers.get("location");
+			if (location) {
+				const nextUrl = new URL(decodeHtmlEntities(location), attemptUrl).toString();
+				if (/xhslink\.com/i.test(nextUrl)) {
+					return resolveXiaohongshuShortLink(nextUrl, redirects + 1);
+				}
+				return normalizeXiaohongshuUrl(nextUrl);
+			}
+
+			const headLocation = await resolveXhsLocationWithHead(attemptUrl);
+			if (headLocation) {
+				const nextUrl = new URL(decodeHtmlEntities(headLocation), attemptUrl).toString();
+				if (/xhslink\.com/i.test(nextUrl)) {
+					return resolveXiaohongshuShortLink(nextUrl, redirects + 1);
+				}
+				return normalizeXiaohongshuUrl(nextUrl);
+			}
+
+			const html = await response.text();
+			const extracted = extractXiaohongshuUrlFromHtml(html);
+			if (extracted) {
+				return extracted;
+			}
+		} catch (_error) {
+			const headLocation = await resolveXhsLocationWithHead(attemptUrl);
+			if (headLocation) {
+				const nextUrl = new URL(decodeHtmlEntities(headLocation), attemptUrl).toString();
+				if (/xhslink\.com/i.test(nextUrl)) {
+					return resolveXiaohongshuShortLink(nextUrl, redirects + 1);
+				}
+				return normalizeXiaohongshuUrl(nextUrl);
+			}
+		}
+	}
+
+	return null;
+}
+
+async function resolveXhsLocationWithHead(url) {
+	try {
+		const response = await fetch(url, {
+			method: "HEAD",
+			headers: buildXiaohongshuHeaders(),
+			redirect: "manual",
+		});
+		return response.headers.get("location") || "";
+	} catch (_error) {
+		return "";
+	}
+}
+
+function normalizeXhsShortLinkUrl(url) {
+	if (!/xhslink\.com/i.test(url)) {
+		return url;
+	}
+	return url.replace(/^http:\/\//i, "https://");
+}
+
+function buildXhsShortLinkAttemptUrls(url) {
+	const normalized = normalizeXhsShortLinkUrl(url);
+	const attempts = [normalized];
+	if (/^https:\/\//i.test(normalized)) {
+		attempts.push(normalized.replace(/^https:\/\//i, "http://"));
+	}
+	return Array.from(new Set(attempts));
+}
+
+function extractXiaohongshuUrlFromHtml(html) {
+	const candidates = [];
+	const addCandidate = (raw) => {
+		if (!raw) {
+			return;
+		}
+		const normalized = normalizeXiaohongshuUrl(decodeHtmlEntities(raw));
+		if (!normalized || candidates.includes(normalized)) {
+			return;
+		}
+		candidates.push(normalized);
+	};
+
+	const metaPatterns = [
+		/<meta\b[^>]*\b(?:property|name)=["']og:url["'][^>]*\bcontent=["']([^"']+)["'][^>]*>/gi,
+		/<meta\b[^>]*\bcontent=["']([^"']+)["'][^>]*\b(?:property|name)=["']og:url["'][^>]*>/gi,
+	];
+	for (const pattern of metaPatterns) {
+		for (const match of html.matchAll(pattern)) {
+			addCandidate(match[1] || "");
+		}
+	}
+
+	const canonicalPatterns = [
+		/<link\b[^>]*\brel=["']canonical["'][^>]*\bhref=["']([^"']+)["'][^>]*>/gi,
+		/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\brel=["']canonical["'][^>]*>/gi,
+	];
+	for (const pattern of canonicalPatterns) {
+		for (const match of html.matchAll(pattern)) {
+			addCandidate(match[1] || "");
+		}
+	}
+
+	const directMatches = html.matchAll(
+		/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/gi
+	);
+	for (const match of directMatches) {
+		addCandidate(match[0]);
+	}
+
+	const withToken = candidates.find((candidate) => /[?&]xsec_token=/i.test(candidate));
+	if (withToken) {
+		return withToken;
+	}
+
+	const fallbackNoteId = extractXhsNoteIdFromUrl(candidates[0] || "");
+	const tokenized = buildTokenizedXhsUrlFromState(html, fallbackNoteId);
+	if (tokenized) {
+		return tokenized;
+	}
+
+	return candidates[0] || null;
+}
+
+function buildTokenizedXhsUrlFromState(html, noteIdHint = "") {
+	const state = parseXhsState(html);
+	if (state) {
+		try {
+			const map = state?.note?.noteDetailMap;
+			if (map && typeof map === "object") {
+				const noteIdFromMap = Object.keys(map)[0] || "";
+				const note = map[noteIdFromMap]?.note;
+				const noteId = (typeof note?.noteId === "string" && note.noteId) || noteIdFromMap;
+				if (noteId) {
+					const xsecToken = typeof note?.xsecToken === "string" ? note.xsecToken.trim() : "";
+					if (xsecToken) {
+						const query = new URLSearchParams({
+							xsec_token: xsecToken,
+							xsec_source: "pc_feed",
+							source: "web_explore_feed",
+						});
+						return normalizeXiaohongshuUrl(`https://www.xiaohongshu.com/discovery/item/${noteId}?${query.toString()}`);
+					}
+					return normalizeXiaohongshuUrl(`https://www.xiaohongshu.com/discovery/item/${noteId}`);
+				}
+			}
+		} catch (_error) {
+			// Continue to regex fallback.
+		}
+	}
+
+	const noteId = noteIdHint || extractXhsNoteIdFromUrl(html);
+	if (!noteId) {
+		return null;
+	}
+
+	const xsecToken = extractXhsTokenFromHtmlByNoteId(html, noteId);
+	if (!xsecToken) {
+		return null;
+	}
+
+	const query = new URLSearchParams({
+		xsec_token: xsecToken,
+		xsec_source: "pc_feed",
+		source: "web_explore_feed",
+	});
+	return normalizeXiaohongshuUrl(`https://www.xiaohongshu.com/discovery/item/${noteId}?${query.toString()}`);
+}
+
+function extractXhsNoteIdFromUrl(input) {
+	if (!input) {
+		return "";
+	}
+	const match = input.match(/\/(?:discovery\/item|explore)\/([a-zA-Z0-9]+)/i);
+	return match?.[1] || "";
+}
+
+function extractXhsTokenFromHtmlByNoteId(html, noteId) {
+	if (!html || !noteId) {
+		return "";
+	}
+
+	const escapedNoteId = noteId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const mapPattern = new RegExp(
+		`"noteDetailMap"\\s*:\\s*\\{\\s*"${escapedNoteId}"\\s*:\\s*\\{[\\s\\S]*?"xsecToken"\\s*:\\s*"([^"]+)"`,
+		"i"
+	);
+	const mapMatch = html.match(mapPattern);
+	if (mapMatch?.[1]) {
+		return decodeJsEscapedString(decodeHtmlEntities(mapMatch[1])).trim();
+	}
+
+	const anyTokenMatch = html.match(/"xsecToken"\s*:\s*"([^"]+)"/i);
+	if (anyTokenMatch?.[1]) {
+		return decodeJsEscapedString(decodeHtmlEntities(anyTokenMatch[1])).trim();
+	}
+	return "";
 }
 
 function extractWechatArticle(sourceUrl, html) {
@@ -530,13 +727,19 @@ function extractXhsNoteData(sourceUrl, html) {
 }
 
 function parseXhsState(html) {
-	const stateMatch = html.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/s);
+	const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)<\/script>/i);
 	if (!stateMatch?.[1]) {
 		return null;
 	}
 
 	try {
-		return JSON.parse(stateMatch[1].trim().replace(/undefined/g, "null"));
+		let jsonStr = stateMatch[1].trim();
+		jsonStr = jsonStr.replace(/;\s*$/, "");
+		const lastBrace = jsonStr.lastIndexOf("}");
+		if (lastBrace >= 0) {
+			jsonStr = jsonStr.slice(0, lastBrace + 1);
+		}
+		return JSON.parse(jsonStr.replace(/undefined/g, "null").replace(/\bNaN\b/g, "null"));
 	} catch (_error) {
 		return null;
 	}
