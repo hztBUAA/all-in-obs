@@ -301,6 +301,11 @@ npx tsc --noEmit
 
 ## Changelog
 
+### 0.1.9
+
+- 调整插件描述文案，移除 `Obsidian` 关键词以满足社区上架校验规则
+- 继续保持 `eslint + build + tsc` 本地检查全通过
+
 ### 0.1.8
 
 - 接入 `eslint-plugin-obsidianmd`（Legacy `.eslintrc`）用于本地预检
