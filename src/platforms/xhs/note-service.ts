@@ -121,7 +121,7 @@ export class XhsNoteService {
 				return null;
 			}
 			return parsed as XhsState;
-		} catch (_error) {
+		} catch {
 			return null;
 		}
 	}
@@ -134,7 +134,7 @@ export class XhsNoteService {
 			}
 			const noteId = Object.keys(map)[0];
 			return map[noteId]?.note ?? null;
-		} catch (_error) {
+		} catch {
 			return null;
 		}
 	}

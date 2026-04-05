@@ -859,7 +859,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 					return ext === "jpeg" ? ".jpg" : `.${ext}`;
 				}
 			}
-		} catch (_error) {
+		} catch {
 			// Ignore URL parsing error and fall back to default extension.
 		}
 

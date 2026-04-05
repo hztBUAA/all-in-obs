@@ -36,8 +36,8 @@ export class ImporterSettingTab extends PluginSettingTab {
 			.setName("默认文件夹")
 			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
 			.addText((text) =>
-				text
-					.setPlaceholder("external files")
+					text
+						.setPlaceholder("External files")
 					.setValue(this.plugin.settings.defaultFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.defaultFolder = this.plugin.normalizeVaultPath(value);
@@ -123,7 +123,7 @@ export class ImporterSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(debugSection).setName("smoke 用例配置").setHeading();
+		new Setting(debugSection).setName("Smoke 用例配置").setHeading();
 		debugSection.createEl("p", {
 			cls: "wca-settings-intro",
 			text: "每行一条输入，可填分享文案或直链；保存后下次运行立即生效。",

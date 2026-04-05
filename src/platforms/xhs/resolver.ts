@@ -252,7 +252,7 @@ export class XhsResolver {
 						return this.normalizeXiaohongshuUrl(`https://www.xiaohongshu.com/discovery/item/${noteId}`);
 					}
 				}
-			} catch (_error) {
+			} catch {
 				// Continue to regex fallback.
 			}
 		}
@@ -327,7 +327,7 @@ export class XhsResolver {
 				return null;
 			}
 			return parsed as XhsResolverState;
-		} catch (_error) {
+		} catch {
 			return null;
 		}
 	}
@@ -347,7 +347,7 @@ export class XhsResolver {
 			}
 
 			return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
-		} catch (_error) {
+		} catch {
 			return normalized.replace("/explore/", "/discovery/item/");
 		}
 	}

@@ -281,7 +281,7 @@ export class WechatArticleService {
 			const doc = new DOMParser().parseFromString(html, "text/html");
 			const contentEl = doc.querySelector("#js_content");
 			return contentEl?.innerHTML ?? "";
-		} catch (_error) {
+		} catch {
 			return "";
 		}
 	}
@@ -312,7 +312,7 @@ export class WechatArticleService {
 			});
 
 			return root.innerHTML;
-		} catch (_error) {
+		} catch {
 			return contentHtml;
 		}
 	}
@@ -337,7 +337,7 @@ export class WechatArticleService {
 					urls.add(normalized);
 				}
 			});
-		} catch (_error) {
+		} catch {
 			const pattern = /<img\b[^>]*?(?:data-src|src)=['"]([^'"]+)['"][^>]*>/gi;
 			let match: RegExpExecArray | null = pattern.exec(contentHtml);
 			while (match) {

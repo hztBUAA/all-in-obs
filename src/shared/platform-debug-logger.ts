@@ -41,7 +41,7 @@ export class PlatformDebugLogger {
 		}
 		try {
 			return JSON.stringify(value).replace(/\s+/g, " ").slice(0, 280);
-		} catch (_error) {
+		} catch {
 			return "[unserializable-value]";
 		}
 	}
@@ -58,7 +58,7 @@ export class PlatformDebugLogger {
 				"",
 			].join("\n");
 			await this.app.vault.adapter.write(this.logPath, header);
-		} catch (_error) {
+		} catch {
 			// Ignore log write failures.
 		}
 	}
@@ -83,7 +83,7 @@ export class PlatformDebugLogger {
 				}
 			}
 			await this.app.vault.adapter.write(this.logPath, `${existing}${line}`);
-		} catch (_error) {
+		} catch {
 			// Ignore log write failures.
 		}
 	}
