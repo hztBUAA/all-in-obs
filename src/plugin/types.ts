@@ -5,6 +5,8 @@ export interface ImporterSettings {
 	lastCustomFolder: string;
 	downloadMedia: boolean;
 	xhsDebugEnabled: boolean;
+	xhsSmokeCaseInputs: string[];
+	wechatSmokeCaseInputs: string[];
 }
 
 export interface ImportInput {

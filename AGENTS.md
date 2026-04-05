@@ -6,6 +6,7 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 
 1. Reproduce with real plugin entry:
 - In Obsidian command palette, run `运行多平台实网 Smoke 测试` (or XHS-only command if needed).
+- Or run from plugin settings page using one-click smoke buttons.
 - This calls the same service path used by normal import flow (`main.ts -> XhsResolver/XhsNoteService`).
 
 2. Inspect artifacts:
@@ -37,6 +38,7 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 
 - Maintained in `src/platforms/wechat/smoke-cases.ts`.
 - Default list can be empty because WeChat may intermittently return verification pages by network.
+- Users can override both platform smoke cases from plugin settings (one case per line).
 
 ## Architecture Boundaries
 

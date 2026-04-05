@@ -7,6 +7,13 @@ export interface ImporterSettingsTabHost {
 	normalizeVaultPath(path: string): string;
 	getXhsDebugLogPath(): string;
 	getXhsSmokeReportPath(): string;
+	getSmokeCasesText(platform: "wechat" | "xiaohongshu"): string;
+	setSmokeCasesText(platform: "wechat" | "xiaohongshu", rawText: string): Promise<void>;
+	runXhsSmokeTests(): Promise<void>;
+	runPlatformSmokeTests(platforms?: Array<"wechat" | "xiaohongshu">): Promise<void>;
+	openSmokeReportFile(): Promise<void>;
+	openXhsDebugLogFile(): Promise<void>;
+	readSmokeReportSummary(): Promise<string>;
 }
 
 export class ImporterSettingTab extends PluginSettingTab {
@@ -57,6 +64,77 @@ export class ImporterSettingTab extends PluginSettingTab {
 		containerEl.createEl("p", {
 			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行多平台实网 Smoke 测试”生成）`,
 		});
+
+		new Setting(containerEl).setName("Smoke 测试").setHeading();
+		containerEl.createEl("p", { text: "可直接在设置页运行测试、查看报告，并自定义各平台测试用例（每行一条）。" });
+
+		new Setting(containerEl)
+			.setName("运行与查看")
+			.addButton((button) =>
+				button
+					.setButtonText("运行多平台 Smoke")
+					.onClick(async () => {
+						await this.plugin.runPlatformSmokeTests();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("仅运行小红书")
+					.onClick(async () => {
+						await this.plugin.runXhsSmokeTests();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("打开报告")
+					.onClick(async () => {
+						await this.plugin.openSmokeReportFile();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("打开调试日志")
+					.onClick(async () => {
+						await this.plugin.openXhsDebugLogFile();
+					})
+			);
+
+		const smokeSummaryEl = containerEl.createEl("pre");
+		smokeSummaryEl.setText("点击“刷新报告摘要”查看最近一次 Smoke 结果。");
+
+		new Setting(containerEl)
+			.setName("报告摘要")
+			.addButton((button) =>
+				button
+					.setButtonText("刷新报告摘要")
+					.onClick(async () => {
+						smokeSummaryEl.setText(await this.plugin.readSmokeReportSummary());
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("小红书 Smoke 用例")
+			.setDesc("每行一条分享文本或链接。")
+			.addTextArea((text) => {
+				text.setPlaceholder("http://xhslink.com/o/xxxx ...");
+				text.setValue(this.plugin.getSmokeCasesText("xiaohongshu"));
+				text.inputEl.rows = 6;
+				text.onChange(async (value) => {
+					await this.plugin.setSmokeCasesText("xiaohongshu", value);
+				});
+			});
+
+		new Setting(containerEl)
+			.setName("微信 Smoke 用例")
+			.setDesc("每行一条公众号链接或分享文本。")
+			.addTextArea((text) => {
+				text.setPlaceholder("https://mp.weixin.qq.com/s/xxxx");
+				text.setValue(this.plugin.getSmokeCasesText("wechat"));
+				text.inputEl.rows = 4;
+				text.onChange(async (value) => {
+					await this.plugin.setSmokeCasesText("wechat", value);
+				});
+			});
 
 		new Setting(containerEl).setName("分类管理").setHeading();
 		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });

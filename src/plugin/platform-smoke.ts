@@ -1,13 +1,16 @@
 import { App } from "obsidian";
 import { buildSmokeSuiteReport } from "./smoke-report";
-import { XHS_SMOKE_CASES } from "../platforms/xhs/smoke-cases";
-import { WECHAT_SMOKE_CASES } from "../platforms/wechat/smoke-cases";
 import { XhsDebugLogger } from "../platforms/xhs/debug-logger";
 import { XhsResolver } from "../platforms/xhs/resolver";
 import { XhsNoteService } from "../platforms/xhs/note-service";
 import { WechatArticleService } from "../platforms/wechat/article-service";
 
 export type SupportedSmokePlatform = "wechat" | "xiaohongshu";
+
+export interface SmokeInputCase {
+	name: string;
+	input: string;
+}
 
 export interface XhsSmokeCaseResult {
 	name: string;
@@ -46,6 +49,8 @@ export interface RunPlatformSmokeOptions {
 	wechatArticleService: WechatArticleService;
 	extractXhsUrl: (input: string) => string | null;
 	extractWechatUrl: (input: string) => string | null;
+	xhsCases: SmokeInputCase[];
+	wechatCases: SmokeInputCase[];
 }
 
 export interface RunPlatformSmokeResult {
@@ -62,7 +67,7 @@ export async function runPlatformSmokeSuite(options: RunPlatformSmokeOptions): P
 
 	if (runXhs) {
 		await options.xhsDebugLogger.reset("SMOKE_SUITE");
-		await options.xhsDebugLogger.append("smoke-suite-start", { caseCount: XHS_SMOKE_CASES.length });
+		await options.xhsDebugLogger.append("smoke-suite-start", { caseCount: options.xhsCases.length });
 	}
 
 	if (runWechat) {
@@ -111,7 +116,7 @@ export async function runPlatformSmokeSuite(options: RunPlatformSmokeOptions): P
 
 async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSmokeCaseResult[]> {
 	const results: XhsSmokeCaseResult[] = [];
-	for (const testCase of XHS_SMOKE_CASES) {
+	for (const testCase of options.xhsCases) {
 		const extracted = options.extractXhsUrl(testCase.input) || "";
 		if (!extracted) {
 			results.push({
@@ -174,7 +179,7 @@ async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSm
 
 async function runWechatSmokeSuite(options: RunPlatformSmokeOptions): Promise<WechatSmokeCaseResult[]> {
 	const results: WechatSmokeCaseResult[] = [];
-	for (const testCase of WECHAT_SMOKE_CASES) {
+	for (const testCase of options.wechatCases) {
 		const extracted = options.extractWechatUrl(testCase.input) || "";
 		if (!extracted) {
 			results.push({

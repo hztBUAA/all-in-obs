@@ -1,18 +1,21 @@
 import {
 	Notice,
 	Plugin,
+	TFile,
 	requestUrl,
 } from "obsidian";
 import { ImportSourceModal } from "./src/plugin/import-modal";
 import { ImporterSettingTab } from "./src/plugin/settings-tab";
 import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
-import { runPlatformSmokeSuite, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
+import { runPlatformSmokeSuite, SmokeInputCase, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
 import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
 import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
 import { XhsDebugLogger } from "./src/platforms/xhs/debug-logger";
 import { XhsResolver } from "./src/platforms/xhs/resolver";
+import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
 import { WechatArticleService } from "./src/platforms/wechat/article-service";
 import { buildWechatHeaders } from "./src/platforms/wechat/headers";
+import { WECHAT_SMOKE_CASES } from "./src/platforms/wechat/smoke-cases";
 
 type SupportedPlatform = "wechat" | "xiaohongshu";
 
@@ -33,6 +36,8 @@ const DEFAULT_SETTINGS: ImporterSettings = {
 	lastCustomFolder: "",
 	downloadMedia: true,
 	xhsDebugEnabled: true,
+	xhsSmokeCaseInputs: XHS_SMOKE_CASES.map((item) => item.input),
+	wechatSmokeCaseInputs: WECHAT_SMOKE_CASES.map((item) => item.input),
 };
 
 interface ImportDestination {
@@ -103,10 +108,28 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		this.settings.defaultFolder = this.normalizeVaultPath(this.settings.defaultFolder);
 		this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(this.settings.lastCustomFolder);
+		this.settings.xhsSmokeCaseInputs = this.normalizeSmokeCaseInputs(
+			this.settings.xhsSmokeCaseInputs,
+			DEFAULT_SETTINGS.xhsSmokeCaseInputs
+		);
+		this.settings.wechatSmokeCaseInputs = this.normalizeSmokeCaseInputs(
+			this.settings.wechatSmokeCaseInputs,
+			DEFAULT_SETTINGS.wechatSmokeCaseInputs
+		);
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	normalizeSmokeCaseInputs(value: unknown, fallback: string[]): string[] {
+		if (!Array.isArray(value)) {
+			return [...fallback];
+		}
+		const normalized = value
+			.map((item) => (typeof item === "string" ? item.trim() : ""))
+			.filter((item) => !!item);
+		return normalized;
 	}
 
 	async handleImportAction() {
@@ -528,6 +551,121 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return XHS_SMOKE_REPORT_PATH;
 	}
 
+	getSmokeCasesText(platform: SupportedSmokePlatform): string {
+		const inputs = platform === "xiaohongshu" ? this.settings.xhsSmokeCaseInputs : this.settings.wechatSmokeCaseInputs;
+		return inputs.join("\n");
+	}
+
+	async setSmokeCasesText(platform: SupportedSmokePlatform, rawText: string): Promise<void> {
+		const parsed = this.normalizeSmokeCaseInputs(rawText.split(/\r?\n/), []);
+		if (platform === "xiaohongshu") {
+			this.settings.xhsSmokeCaseInputs = parsed;
+		} else {
+			this.settings.wechatSmokeCaseInputs = parsed;
+		}
+		await this.saveSettings();
+	}
+
+	async openSmokeReportFile(): Promise<void> {
+		await this.openOrCreateTextFile(
+			this.getXhsSmokeReportPath(),
+			`${JSON.stringify({ message: "Smoke report has not been generated yet." }, null, 2)}\n`
+		);
+	}
+
+	async openXhsDebugLogFile(): Promise<void> {
+		await this.openOrCreateTextFile(this.getXhsDebugLogPath(), "");
+	}
+
+	async readSmokeReportSummary(): Promise<string> {
+		const reportPath = this.getXhsSmokeReportPath();
+		if (!(await this.app.vault.adapter.exists(reportPath))) {
+			return `报告不存在：${reportPath}`;
+		}
+
+		try {
+			const text = await this.app.vault.adapter.read(reportPath);
+			const report = JSON.parse(text) as {
+				finishedAt?: string;
+				caseCount?: number;
+				successCount?: number;
+				failedCount?: number;
+				platformSummary?: {
+					wechat?: { caseCount?: number; successCount?: number };
+					xiaohongshu?: { caseCount?: number; successCount?: number };
+				};
+				results?: Array<{
+					platform?: string;
+					name?: string;
+					status?: string;
+					error?: string;
+				}>;
+			};
+
+			const lines: string[] = [];
+			lines.push(`报告路径: ${reportPath}`);
+			lines.push(`完成时间: ${report.finishedAt || "unknown"}`);
+			lines.push(`总计: ${report.successCount ?? 0}/${report.caseCount ?? 0} 成功, 失败 ${report.failedCount ?? 0}`);
+			lines.push(
+				`XHS: ${report.platformSummary?.xiaohongshu?.successCount ?? 0}/${report.platformSummary?.xiaohongshu?.caseCount ?? 0}`
+			);
+			lines.push(
+				`Wechat: ${report.platformSummary?.wechat?.successCount ?? 0}/${report.platformSummary?.wechat?.caseCount ?? 0}`
+			);
+
+			const failed = (report.results || []).filter((item) => item.status !== "success");
+			if (failed.length > 0) {
+				lines.push("");
+				lines.push("失败用例:");
+				for (const item of failed.slice(0, 8)) {
+					lines.push(`[${item.platform || "unknown"}] ${item.name || "unnamed"} -> ${item.error || "unknown error"}`);
+				}
+			}
+
+			return lines.join("\n");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return `读取报告失败: ${message}`;
+		}
+	}
+
+	async openOrCreateTextFile(path: string, defaultContent: string): Promise<void> {
+		const normalizedPath = path.trim().replace(/^\/+/, "");
+		if (!normalizedPath) {
+			new Notice("文件路径无效。");
+			return;
+		}
+
+		const folderPath = normalizedPath.includes("/") ? normalizedPath.slice(0, normalizedPath.lastIndexOf("/")) : "";
+		if (folderPath) {
+			await this.ensureFolder(folderPath);
+		}
+
+		let abstract = this.app.vault.getAbstractFileByPath(normalizedPath);
+		if (!abstract) {
+			abstract = await this.app.vault.create(normalizedPath, defaultContent);
+		}
+		if (!(abstract instanceof TFile)) {
+			new Notice(`路径不是文件：${normalizedPath}`);
+			return;
+		}
+
+		await this.app.workspace.getLeaf(true).openFile(abstract);
+	}
+
+	buildSmokeInputCases(platform: SupportedSmokePlatform): SmokeInputCase[] {
+		const inputs = platform === "xiaohongshu" ? this.settings.xhsSmokeCaseInputs : this.settings.wechatSmokeCaseInputs;
+		const prefix = platform === "xiaohongshu" ? "XHS" : "Wechat";
+		return inputs.map((input, index) => {
+			const compact = input.replace(/\s+/g, " ").trim();
+			const shortName = compact.slice(0, 20) || `${prefix}-${index + 1}`;
+			return {
+				name: `${prefix}-${index + 1}: ${shortName}`,
+				input,
+			};
+		});
+	}
+
 	async runXhsSmokeTests(): Promise<void> {
 		await this.runPlatformSmokeTests(["xiaohongshu"]);
 	}
@@ -544,6 +682,8 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			wechatArticleService: this.wechatArticleService,
 			extractXhsUrl: (input) => this.extractXiaohongshuUrl(input),
 			extractWechatUrl: (input) => this.extractWechatUrl(input),
+			xhsCases: this.buildSmokeInputCases("xiaohongshu"),
+			wechatCases: this.buildSmokeInputCases("wechat"),
 		});
 		new Notice(`平台 Smoke 测试完成：成功 ${result.successCount}，失败 ${result.failedCount}。报告：${result.reportPath}`);
 	}

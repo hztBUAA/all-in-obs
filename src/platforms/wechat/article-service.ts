@@ -157,7 +157,7 @@ export class WechatArticleService {
 		});
 
 		turndown.addRule("removeSvg", {
-			filter: (node) => node.nodeName.toLowerCase() === "svg",
+			filter: (node: HTMLElement) => node.nodeName.toLowerCase() === "svg",
 			replacement: () => "",
 		});
 
