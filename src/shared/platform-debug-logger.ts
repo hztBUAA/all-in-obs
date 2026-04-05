@@ -1,7 +1,7 @@
 import { App } from "obsidian";
-import { XHS_DEBUG_LOG_PATH } from "../../shared/paths";
+import { PLATFORM_DEBUG_LOG_PATH } from "./paths";
 
-export interface XhsDebugLoggerOptions {
+export interface PlatformDebugLoggerOptions {
 	app: App;
 	isEnabled: () => boolean;
 	logPath?: string;
@@ -9,17 +9,17 @@ export interface XhsDebugLoggerOptions {
 	truncateTo?: number;
 }
 
-export class XhsDebugLogger {
+export class PlatformDebugLogger {
 	private readonly app: App;
 	private readonly isEnabledFn: () => boolean;
 	private readonly logPath: string;
 	private readonly maxSize: number;
 	private readonly truncateTo: number;
 
-	constructor(options: XhsDebugLoggerOptions) {
+	constructor(options: PlatformDebugLoggerOptions) {
 		this.app = options.app;
 		this.isEnabledFn = options.isEnabled;
-		this.logPath = options.logPath || XHS_DEBUG_LOG_PATH;
+		this.logPath = options.logPath || PLATFORM_DEBUG_LOG_PATH;
 		this.maxSize = options.maxSize ?? 180000;
 		this.truncateTo = options.truncateTo ?? 120000;
 	}
@@ -46,15 +46,15 @@ export class XhsDebugLogger {
 		}
 	}
 
-	async reset(inputUrl: string): Promise<void> {
+	async reset(context: string): Promise<void> {
 		if (!this.isEnabled()) {
 			return;
 		}
 		try {
 			const header = [
-				"================ XHS DEBUG ================",
+				"================ PLATFORM DEBUG ================",
 				`time=${new Date().toISOString()}`,
-				`inputUrl=${this.formatValue(inputUrl)}`,
+				`context=${this.formatValue(context)}`,
 				"",
 			].join("\n");
 			await this.app.vault.adapter.write(this.logPath, header);
@@ -72,7 +72,7 @@ export class XhsDebugLogger {
 			([key, value]) => `${key}=${this.formatValue(value)}`
 		);
 		const line = `[${new Date().toISOString()}] ${stage}${lineParts.length > 0 ? ` | ${lineParts.join(" | ")}` : ""}\n`;
-		console.info(`[XHS-DEBUG] ${line.trim()}`);
+		console.info(`[PLATFORM-DEBUG] ${line.trim()}`);
 
 		try {
 			let existing = "";

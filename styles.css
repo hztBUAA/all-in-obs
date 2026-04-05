@@ -80,3 +80,43 @@
 	width: 100%;
 	margin: 0;
 }
+
+.wca-settings-root {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.wca-settings-section {
+	padding: 12px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	background: var(--background-primary-alt);
+}
+
+.wca-settings-intro {
+	margin: 4px 0 12px 0;
+	color: var(--text-muted);
+}
+
+.wca-settings-path {
+	margin: 0 0 6px 0;
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	color: var(--text-muted);
+	word-break: break-all;
+}
+
+.wca-settings-summary {
+	margin: 8px 0 0 0;
+	padding: 10px 12px;
+	border-radius: 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.wca-settings-subheading {
+	margin: 14px 0 6px 0;
+}

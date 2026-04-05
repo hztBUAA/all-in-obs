@@ -8,14 +8,14 @@ import { ImporterSettingTab } from "./src/plugin/settings-tab";
 import { TextPreviewModal } from "./src/plugin/text-preview-modal";
 import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
 import { runPlatformSmokeSuite, SmokeInputCase, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
-import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
+import { PLATFORM_SMOKE_REPORT_PATH } from "./src/shared/paths";
 import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
-import { XhsDebugLogger } from "./src/platforms/xhs/debug-logger";
 import { XhsResolver } from "./src/platforms/xhs/resolver";
 import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
 import { WechatArticleService } from "./src/platforms/wechat/article-service";
 import { buildWechatHeaders } from "./src/platforms/wechat/headers";
 import { WECHAT_SMOKE_CASES } from "./src/platforms/wechat/smoke-cases";
+import { PlatformDebugLogger } from "./src/shared/platform-debug-logger";
 
 type SupportedPlatform = "wechat" | "xiaohongshu";
 
@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: ImporterSettings = {
 	lastCategory: "",
 	lastCustomFolder: "",
 	downloadMedia: true,
-	xhsDebugEnabled: true,
+	debugEnabled: true,
 	xhsSmokeCaseInputs: XHS_SMOKE_CASES.map((item) => item.input),
 	wechatSmokeCaseInputs: WECHAT_SMOKE_CASES.map((item) => item.input),
 };
@@ -49,7 +49,7 @@ interface ImportDestination {
 
 export default class MultiSourceImporterPlugin extends Plugin {
 	settings: ImporterSettings;
-	xhsDebugLogger: XhsDebugLogger;
+	debugLogger: PlatformDebugLogger;
 	xhsResolver: XhsResolver;
 	xhsNoteService: XhsNoteService;
 	wechatArticleService: WechatArticleService;
@@ -71,14 +71,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		});
 
 		this.addCommand({
-			id: "run-xhs-smoke-tests",
-			name: "运行小红书实网 Smoke 测试",
-			callback: async () => {
-				await this.runXhsSmokeTests();
-			},
-		});
-
-		this.addCommand({
 			id: "run-platform-smoke-tests",
 			name: "运行多平台实网 Smoke 测试",
 			callback: async () => {
@@ -90,12 +82,12 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	initializeServices() {
-		this.xhsDebugLogger = new XhsDebugLogger({
+		this.debugLogger = new PlatformDebugLogger({
 			app: this.app,
-			isEnabled: () => this.settings.xhsDebugEnabled,
+			isEnabled: () => this.settings.debugEnabled,
 		});
 		this.xhsResolver = new XhsResolver({
-			logger: this.xhsDebugLogger,
+			logger: this.debugLogger,
 			buildHeaders: () => this.buildXiaohongshuHeaders(),
 		});
 		this.xhsNoteService = new XhsNoteService({
@@ -105,7 +97,13 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const loaded = (await this.loadData()) || {};
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+		const loadedSettings = loaded as ImporterSettings;
+		if (typeof loadedSettings.debugEnabled !== "boolean" && typeof loadedSettings.xhsDebugEnabled === "boolean") {
+			this.settings.debugEnabled = !!loadedSettings.xhsDebugEnabled;
+		}
+		delete (this.settings as ImporterSettings).xhsDebugEnabled;
 		this.settings.defaultFolder = this.normalizeVaultPath(this.settings.defaultFolder);
 		this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(this.settings.lastCustomFolder);
 		this.settings.xhsSmokeCaseInputs = this.normalizeSmokeCaseInputs(
@@ -189,7 +187,12 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 	async promptForImportInput(): Promise<ImportInput | null> {
 		return new Promise((resolve) => {
-			const modal = new ImportSourceModal(this.app, this.settings, (result) => resolve(result));
+			const modal = new ImportSourceModal(
+				this.app,
+				this.settings,
+				this.getAvailableCategories(),
+				(result) => resolve(result)
+			);
 			modal.open();
 		});
 	}
@@ -219,6 +222,55 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return "";
 		}
 		return this.normalizeVaultPath(displayPath);
+	}
+
+	getDetectedCategoriesFromVault(): string[] {
+		const baseFolder = this.normalizeVaultPath(this.settings.defaultFolder);
+		const basePrefix = baseFolder ? `${baseFolder}/` : "";
+		const categories = new Set<string>();
+
+		for (const folder of this.app.vault.getAllFolders(true)) {
+			const normalizedFolderPath = this.normalizeVaultPath(folder.path || "");
+			if (!normalizedFolderPath) {
+				continue;
+			}
+
+			let relativePath = normalizedFolderPath;
+			if (baseFolder) {
+				if (normalizedFolderPath === baseFolder) {
+					continue;
+				}
+				if (!normalizedFolderPath.startsWith(basePrefix)) {
+					continue;
+				}
+				relativePath = normalizedFolderPath.slice(basePrefix.length);
+			}
+
+			const segments = relativePath.split("/").filter(Boolean);
+			if (segments.length !== 1) {
+				continue;
+			}
+			categories.add(segments[0]);
+		}
+
+		return Array.from(categories).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+	}
+
+	getAvailableCategories(): string[] {
+		const merged: string[] = [];
+		const seen = new Set<string>();
+		const append = (category: string) => {
+			const name = category.trim();
+			if (!name || name === "其他" || name === CUSTOM_FOLDER_CATEGORY || seen.has(name)) {
+				return;
+			}
+			seen.add(name);
+			merged.push(name);
+		};
+
+		this.settings.categories.forEach((category) => append(category));
+		this.getDetectedCategoriesFromVault().forEach((category) => append(category));
+		return merged;
 	}
 
 	resolveImportDestination(category: string, useCustomFolder: boolean, customFolderPath: string): ImportDestination {
@@ -358,6 +410,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		silent = false
 	): Promise<boolean> {
 		try {
+			await this.debugLogger.append("import-start", { platform: "wechat", inputUrl: url, silent });
 			const normalizedUrl = this.normalizeArticleUrl(url);
 			const html = await this.wechatArticleService.fetchHtml(normalizedUrl);
 			const article = this.wechatArticleService.extractArticle(normalizedUrl, html);
@@ -408,6 +461,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 				this.settings.lastCustomFolder = destination.customFolderPath;
 			}
 			await this.saveSettings();
+			await this.debugLogger.append("import-success", { platform: "wechat", filePath, title: article.title });
 
 			if (!silent) {
 				new Notice(`已导入公众号文章：${filePath}`);
@@ -415,6 +469,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			await this.debugLogger.append("import-error", { platform: "wechat", message });
 			console.error("Failed to import WeChat article:", error);
 			if (!silent) {
 				new Notice(`导入失败：${message}`);
@@ -440,10 +495,9 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		silent = false
 	): Promise<boolean> {
 		try {
-			await this.xhsDebugLogger.reset(url);
-			await this.xhsDebugLogger.append("import-start", { inputUrl: url });
+			await this.debugLogger.append("import-start", { platform: "xiaohongshu", inputUrl: url, silent });
 			const resolvedUrl = await this.xhsResolver.resolve(url);
-			await this.xhsDebugLogger.append("import-resolved-url", { resolvedUrl });
+			await this.debugLogger.append("import-resolved-url", { platform: "xiaohongshu", resolvedUrl });
 			const html = await this.xhsNoteService.fetchHtml(resolvedUrl);
 			const note = this.xhsNoteService.extractNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
@@ -528,13 +582,14 @@ export default class MultiSourceImporterPlugin extends Plugin {
 				this.settings.lastCustomFolder = destination.customFolderPath;
 			}
 			await this.saveSettings();
+			await this.debugLogger.append("import-success", { platform: "xiaohongshu", filePath, title: note.title });
 			if (!silent) {
 				new Notice(`已导入小红书内容：${filePath}`);
 			}
 			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await this.xhsDebugLogger.append("import-error", { message });
+			await this.debugLogger.append("import-error", { platform: "xiaohongshu", message });
 			console.error("Failed to import Xiaohongshu note:", error);
 			if (!silent) {
 				new Notice(`导入失败：${message}`);
@@ -543,12 +598,12 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 	}
 
-	getXhsDebugLogPath(): string {
-		return this.xhsDebugLogger.getLogPath();
+	getDebugLogPath(): string {
+		return this.debugLogger.getLogPath();
 	}
 
-	getXhsSmokeReportPath(): string {
-		return XHS_SMOKE_REPORT_PATH;
+	getSmokeReportPath(): string {
+		return PLATFORM_SMOKE_REPORT_PATH;
 	}
 
 	getSmokeCasesText(platform: SupportedSmokePlatform): string {
@@ -569,17 +624,17 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	async openSmokeReportFile(): Promise<void> {
 		await this.showTextPreviewModal(
 			"Smoke 报告",
-			this.getXhsSmokeReportPath(),
+			this.getSmokeReportPath(),
 			`${JSON.stringify({ message: "Smoke report has not been generated yet." }, null, 2)}\n`
 		);
 	}
 
-	async openXhsDebugLogFile(): Promise<void> {
-		await this.showTextPreviewModal("XHS 调试日志", this.getXhsDebugLogPath(), "");
+	async openDebugLogFile(): Promise<void> {
+		await this.showTextPreviewModal("调试日志（多平台）", this.getDebugLogPath(), "");
 	}
 
 	async readSmokeReportSummary(): Promise<string> {
-		const reportPath = this.getXhsSmokeReportPath();
+		const reportPath = this.getSmokeReportPath();
 		if (!(await this.app.vault.adapter.exists(reportPath))) {
 			return `报告不存在：${reportPath}`;
 		}
@@ -663,17 +718,13 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		});
 	}
 
-	async runXhsSmokeTests(): Promise<void> {
-		await this.runPlatformSmokeTests(["xiaohongshu"]);
-	}
-
 	async runPlatformSmokeTests(platforms: SupportedSmokePlatform[] = ["wechat", "xiaohongshu"]): Promise<void> {
 		const result = await runPlatformSmokeSuite({
 			app: this.app,
 			pluginVersion: this.manifest.version,
-			reportPath: this.getXhsSmokeReportPath(),
+			reportPath: this.getSmokeReportPath(),
 			platforms,
-			xhsDebugLogger: this.xhsDebugLogger,
+			debugLogger: this.debugLogger,
 			xhsResolver: this.xhsResolver,
 			xhsNoteService: this.xhsNoteService,
 			wechatArticleService: this.wechatArticleService,

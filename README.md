@@ -56,10 +56,10 @@
 ### 设置项说明
 
 - `defaultFolder`：导入根目录
-- `categories`：分类列表，可在设置页维护
+- `categories`：分类列表，可在设置页维护；导入时也会自动识别 `defaultFolder` 下已有的一级子目录
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
-- `xhsDebugEnabled`：是否写入小红书调试日志（默认开启）
+- `debugEnabled`：是否写入多平台统一调试日志（默认开启）
 
 ### Frontmatter 字段
 
@@ -157,12 +157,12 @@ ln -s "$(pwd)" "<你的Vault>/.obsidian/plugins/multi-source-content-importer"
 
 #### 排障与 Smoke
 
-- 命令面板可执行 `运行多平台实网 Smoke 测试`（兼容保留 `运行小红书实网 Smoke 测试`）
-- 插件设置页支持一键运行 Smoke、打开报告、打开调试日志
+- 命令面板可执行 `运行多平台实网 Smoke 测试`
+- 插件设置页支持一键运行 Smoke、打开报告、打开调试日志（统一多平台）
 - 插件设置页支持按行自定义微信/小红书 Smoke 用例
-- 报告输出：`.obsidian/plugins/multi-source-content-importer/xhs-smoke-report.json`
-- 调试日志：`.obsidian/plugins/multi-source-content-importer/xhs-debug.log`
-- 设置页可关闭 `xhsDebugEnabled`
+- 报告输出：`.obsidian/plugins/multi-source-content-importer/smoke-report.json`
+- 调试日志：`.obsidian/plugins/multi-source-content-importer/debug.log`
+- 设置页可关闭 `debugEnabled`
 
 #### 常见安装问题
 

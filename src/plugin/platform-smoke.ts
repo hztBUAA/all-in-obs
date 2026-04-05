@@ -1,6 +1,6 @@
 import { App } from "obsidian";
 import { buildSmokeSuiteReport } from "./smoke-report";
-import { XhsDebugLogger } from "../platforms/xhs/debug-logger";
+import { PlatformDebugLogger } from "../shared/platform-debug-logger";
 import { XhsResolver } from "../platforms/xhs/resolver";
 import { XhsNoteService } from "../platforms/xhs/note-service";
 import { WechatArticleService } from "../platforms/wechat/article-service";
@@ -43,7 +43,7 @@ export interface RunPlatformSmokeOptions {
 	pluginVersion: string;
 	reportPath: string;
 	platforms: SupportedSmokePlatform[];
-	xhsDebugLogger: XhsDebugLogger;
+	debugLogger: PlatformDebugLogger;
 	xhsResolver: XhsResolver;
 	xhsNoteService: XhsNoteService;
 	wechatArticleService: WechatArticleService;
@@ -64,11 +64,12 @@ export async function runPlatformSmokeSuite(options: RunPlatformSmokeOptions): P
 	const runWechat = options.platforms.includes("wechat");
 	const runXhs = options.platforms.includes("xiaohongshu");
 	const results: PlatformSmokeCaseResult[] = [];
-
-	if (runXhs) {
-		await options.xhsDebugLogger.reset("SMOKE_SUITE");
-		await options.xhsDebugLogger.append("smoke-suite-start", { caseCount: options.xhsCases.length });
-	}
+	await options.debugLogger.reset(`SMOKE_SUITE:${options.platforms.join(",")}`);
+	await options.debugLogger.append("smoke-suite-start", {
+		platforms: options.platforms.join(","),
+		xhsCaseCount: options.xhsCases.length,
+		wechatCaseCount: options.wechatCases.length,
+	});
 
 	if (runWechat) {
 		results.push(...await runWechatSmokeSuite(options));
@@ -99,13 +100,11 @@ export async function runPlatformSmokeSuite(options: RunPlatformSmokeOptions): P
 	);
 
 	await options.app.vault.adapter.write(options.reportPath, `${JSON.stringify({ ...report, platformSummary }, null, 2)}\n`);
-	if (runXhs) {
-		await options.xhsDebugLogger.append("smoke-suite-finished", {
-			successCount,
-			failedCount,
-			reportPath: options.reportPath,
-		});
-	}
+	await options.debugLogger.append("smoke-suite-finished", {
+		successCount,
+		failedCount,
+		reportPath: options.reportPath,
+	});
 
 	return {
 		successCount,
@@ -118,6 +117,11 @@ async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSm
 	const results: XhsSmokeCaseResult[] = [];
 	for (const testCase of options.xhsCases) {
 		const extracted = options.extractXhsUrl(testCase.input) || "";
+		await options.debugLogger.append("smoke-case-start", {
+			platform: "xiaohongshu",
+			name: testCase.name,
+			extractedUrl: extracted,
+		});
 		if (!extracted) {
 			results.push({
 				name: testCase.name,
@@ -132,10 +136,14 @@ async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSm
 				status: "failed",
 				error: "未能从输入文本识别出小红书链接",
 			});
+			await options.debugLogger.append("smoke-case-failed", {
+				platform: "xiaohongshu",
+				name: testCase.name,
+				error: "未能从输入文本识别出小红书链接",
+			});
 			continue;
 		}
 
-		await options.xhsDebugLogger.append("smoke-case-start", { name: testCase.name, extractedUrl: extracted });
 		let resolvedUrl = "";
 		let hasXsecToken = false;
 		try {
@@ -157,6 +165,14 @@ async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSm
 				status: "success",
 				error: "",
 			});
+			await options.debugLogger.append("smoke-case-success", {
+				platform: "xiaohongshu",
+				name: testCase.name,
+				resolvedUrl,
+				title: note.title,
+				hasXsecToken,
+				isVideo: note.isVideo,
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			results.push({
@@ -172,6 +188,12 @@ async function runXhsSmokeSuite(options: RunPlatformSmokeOptions): Promise<XhsSm
 				status: "failed",
 				error: message,
 			});
+			await options.debugLogger.append("smoke-case-failed", {
+				platform: "xiaohongshu",
+				name: testCase.name,
+				resolvedUrl,
+				error: message,
+			});
 		}
 	}
 	return results;
@@ -181,6 +203,11 @@ async function runWechatSmokeSuite(options: RunPlatformSmokeOptions): Promise<We
 	const results: WechatSmokeCaseResult[] = [];
 	for (const testCase of options.wechatCases) {
 		const extracted = options.extractWechatUrl(testCase.input) || "";
+		await options.debugLogger.append("smoke-case-start", {
+			platform: "wechat",
+			name: testCase.name,
+			extractedUrl: extracted,
+		});
 		if (!extracted) {
 			results.push({
 				name: testCase.name,
@@ -189,6 +216,11 @@ async function runWechatSmokeSuite(options: RunPlatformSmokeOptions): Promise<We
 				extractedUrl: "",
 				title: "",
 				status: "failed",
+				error: "未能从输入文本识别出微信链接",
+			});
+			await options.debugLogger.append("smoke-case-failed", {
+				platform: "wechat",
+				name: testCase.name,
 				error: "未能从输入文本识别出微信链接",
 			});
 			continue;
@@ -206,6 +238,11 @@ async function runWechatSmokeSuite(options: RunPlatformSmokeOptions): Promise<We
 				status: "success",
 				error: "",
 			});
+			await options.debugLogger.append("smoke-case-success", {
+				platform: "wechat",
+				name: testCase.name,
+				title: article.title,
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			results.push({
@@ -215,6 +252,11 @@ async function runWechatSmokeSuite(options: RunPlatformSmokeOptions): Promise<We
 				extractedUrl: extracted,
 				title: "",
 				status: "failed",
+				error: message,
+			});
+			await options.debugLogger.append("smoke-case-failed", {
+				platform: "wechat",
+				name: testCase.name,
 				error: message,
 			});
 		}

@@ -1,13 +1,13 @@
 import { requestUrl } from "obsidian";
-import { XhsDebugLogger } from "./debug-logger";
+import { PlatformDebugLogger } from "../../shared/platform-debug-logger";
 
 export interface XhsResolverOptions {
-	logger: XhsDebugLogger;
+	logger: PlatformDebugLogger;
 	buildHeaders: () => Record<string, string>;
 }
 
 export class XhsResolver {
-	private readonly logger: XhsDebugLogger;
+	private readonly logger: PlatformDebugLogger;
 	private readonly buildHeaders: () => Record<string, string>;
 
 	constructor(options: XhsResolverOptions) {
@@ -22,25 +22,25 @@ export class XhsResolver {
 		}
 
 		const shortLinkUrl = this.normalizeXhsShortLinkUrl(normalized);
-		await this.logger.append("resolve-shortlink-start", { normalized, shortLinkUrl });
+		await this.log("resolve-shortlink-start", { normalized, shortLinkUrl });
 		const resolvedUrl = await this.resolveShortLink(shortLinkUrl);
 		if (resolvedUrl) {
 			return resolvedUrl;
 		}
 
-		await this.logger.append("resolve-shortlink-failed", { shortLinkUrl });
+		await this.log("resolve-shortlink-failed", { shortLinkUrl });
 		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
 	}
 
 	async resolveShortLink(url: string, redirects = 0): Promise<string | null> {
 		if (redirects > 5) {
-			await this.logger.append("resolve-max-redirect", { url, redirects });
+			await this.log("resolve-max-redirect", { url, redirects });
 			return null;
 		}
 
 		const attemptUrls = this.buildXhsShortLinkAttemptUrls(url);
 		for (const attemptUrl of attemptUrls) {
-			await this.logger.append("resolve-attempt", { attemptUrl, redirects });
+			await this.log("resolve-attempt", { attemptUrl, redirects });
 			try {
 				const response = await requestUrl({
 					url: attemptUrl,
@@ -50,7 +50,7 @@ export class XhsResolver {
 				});
 
 				const location = this.getHeaderIgnoreCase(response.headers as Record<string, unknown>, "location");
-				await this.logger.append("resolve-get-response", {
+				await this.log("resolve-get-response", {
 					attemptUrl,
 					status: response.status,
 					hasLocation: !!location,
@@ -58,7 +58,7 @@ export class XhsResolver {
 				});
 				if (location) {
 					const nextUrl = new URL(this.decodeHtmlEntities(location), attemptUrl).toString();
-					await this.logger.append("resolve-get-location", { attemptUrl, nextUrl });
+					await this.log("resolve-get-location", { attemptUrl, nextUrl });
 					if (/xhslink\.com/i.test(nextUrl)) {
 						return this.resolveShortLink(nextUrl, redirects + 1);
 					}
@@ -68,7 +68,7 @@ export class XhsResolver {
 				const headLocation = await this.resolveLocationWithHead(attemptUrl);
 				if (headLocation) {
 					const nextUrl = new URL(this.decodeHtmlEntities(headLocation), attemptUrl).toString();
-					await this.logger.append("resolve-head-location", { attemptUrl, nextUrl });
+					await this.log("resolve-head-location", { attemptUrl, nextUrl });
 					if (/xhslink\.com/i.test(nextUrl)) {
 						return this.resolveShortLink(nextUrl, redirects + 1);
 					}
@@ -76,7 +76,7 @@ export class XhsResolver {
 				}
 
 				const extracted = this.extractFromHtml(response.text);
-				await this.logger.append("resolve-html-extracted", {
+				await this.log("resolve-html-extracted", {
 					attemptUrl,
 					extracted: extracted || "",
 				});
@@ -85,12 +85,12 @@ export class XhsResolver {
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				await this.logger.append("resolve-get-error", { attemptUrl, message });
+				await this.log("resolve-get-error", { attemptUrl, message });
 
 				const headLocation = await this.resolveLocationWithHead(attemptUrl);
 				if (headLocation) {
 					const nextUrl = new URL(this.decodeHtmlEntities(headLocation), attemptUrl).toString();
-					await this.logger.append("resolve-head-location-after-error", { attemptUrl, nextUrl });
+					await this.log("resolve-head-location-after-error", { attemptUrl, nextUrl });
 					if (/xhslink\.com/i.test(nextUrl)) {
 						return this.resolveShortLink(nextUrl, redirects + 1);
 					}
@@ -111,7 +111,7 @@ export class XhsResolver {
 				throw: false,
 			});
 			const location = this.getHeaderIgnoreCase(response.headers as Record<string, unknown>, "location");
-			await this.logger.append("resolve-head-response", {
+			await this.log("resolve-head-response", {
 				url,
 				status: response.status,
 				hasLocation: !!location,
@@ -119,9 +119,16 @@ export class XhsResolver {
 			return location;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			await this.logger.append("resolve-head-error", { url, message });
+			await this.log("resolve-head-error", { url, message });
 			return "";
 		}
+	}
+
+	async log(stage: string, payload: Record<string, unknown> = {}): Promise<void> {
+		await this.logger.append(stage, {
+			platform: "xiaohongshu",
+			...payload,
+		});
 	}
 
 	extractFromHtml(html: string): string | null {

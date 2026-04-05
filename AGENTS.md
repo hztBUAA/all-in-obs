@@ -5,13 +5,13 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 ## Standard Debug Loop
 
 1. Reproduce with real plugin entry:
-- In Obsidian command palette, run `运行多平台实网 Smoke 测试` (or XHS-only command if needed).
+- In Obsidian command palette, run `运行多平台实网 Smoke 测试`.
 - Or run from plugin settings page using one-click smoke buttons.
 - This calls the same service path used by normal import flow (`main.ts -> XhsResolver/XhsNoteService`).
 
 2. Inspect artifacts:
-- Debug log: `.obsidian/plugins/multi-source-content-importer/xhs-debug.log`
-- Smoke report: `.obsidian/plugins/multi-source-content-importer/xhs-smoke-report.json`
+- Debug log: `.obsidian/plugins/multi-source-content-importer/debug.log`
+- Smoke report: `.obsidian/plugins/multi-source-content-importer/smoke-report.json`
 
 3. Locate failure stage from logs:
 - `resolve-get-response` / `resolve-head-response`: shortlink redirect behavior.
@@ -55,7 +55,6 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 - `src/platforms/xhs`
 - `resolver.ts`: shortlink resolution (GET Location -> HEAD Location -> HTML extraction -> token rebuild).
 - `note-service.ts`: note HTML fetch, unavailable-page detection, structured extraction.
-- `debug-logger.ts`: opt-in/out debug logging with rolling truncation.
 - `smoke-cases.ts`: shared real-world smoke case set.
 
 - `src/platforms/wechat`
@@ -73,7 +72,7 @@ When plugin XHS resolver behavior changes, update skills script in the same PR.
 ## Pre-Release Checklist
 
 1. `npm run build` passes.
-2. Run Obsidian command `运行小红书实网 Smoke 测试`.
-3. Confirm `xhs-smoke-report.json` success/failure count is acceptable and no known fixed case regresses.
+2. Run Obsidian command `运行多平台实网 Smoke 测试`.
+3. Confirm `smoke-report.json` success/failure count is acceptable and no known fixed case regresses.
 4. Spot-check at least one direct long link and one xhs shortlink import in UI.
-5. Keep `xhsDebugEnabled` default `true`; only disable for privacy-sensitive users.
+5. Keep `debugEnabled` default `true`; only disable for privacy-sensitive users.

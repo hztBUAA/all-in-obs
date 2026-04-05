@@ -4,9 +4,11 @@ export interface ImporterSettings {
 	lastCategory: string;
 	lastCustomFolder: string;
 	downloadMedia: boolean;
-	xhsDebugEnabled: boolean;
+	debugEnabled: boolean;
 	xhsSmokeCaseInputs: string[];
 	wechatSmokeCaseInputs: string[];
+	// Legacy key kept for seamless migration from older versions.
+	xhsDebugEnabled?: boolean;
 }
 
 export interface ImportInput {

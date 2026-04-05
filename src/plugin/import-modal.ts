@@ -6,13 +6,20 @@ export class ImportSourceModal extends Modal {
 	result: ImportInput | null = null;
 	onSubmit: (result: ImportInput | null) => void;
 	settings: ImporterSettings;
+	availableCategories: string[];
 	selectedCategory: string;
 	downloadMedia: boolean;
 	customFolderPath: string;
 
-	constructor(app: App, settings: ImporterSettings, onSubmit: (result: ImportInput | null) => void) {
+	constructor(
+		app: App,
+		settings: ImporterSettings,
+		availableCategories: string[],
+		onSubmit: (result: ImportInput | null) => void
+	) {
 		super(app);
 		this.settings = settings;
+		this.availableCategories = availableCategories;
 		this.onSubmit = onSubmit;
 		this.selectedCategory = this.resolveInitialCategory();
 		this.downloadMedia = this.settings.downloadMedia;
@@ -26,10 +33,10 @@ export class ImportSourceModal extends Modal {
 		if (this.settings.lastCategory === CUSTOM_FOLDER_CATEGORY && this.settings.lastCustomFolder) {
 			return CUSTOM_FOLDER_CATEGORY;
 		}
-		if (this.settings.lastCategory && this.settings.categories.includes(this.settings.lastCategory)) {
+		if (this.settings.lastCategory && this.availableCategories.includes(this.settings.lastCategory)) {
 			return this.settings.lastCategory;
 		}
-		return this.settings.categories[0] || "其他";
+		return this.availableCategories[0] || "其他";
 	}
 
 	normalizeCustomFolderInput(path: string): string | null {
@@ -77,9 +84,11 @@ export class ImportSourceModal extends Modal {
 		customFolderInput.addEventListener("input", () => {
 			this.customFolderPath = customFolderInput.value;
 		});
-		new VaultFolderPathSuggest(this.app, customFolderInput);
+		new VaultFolderPathSuggest(this.app, customFolderInput, (value) => {
+			this.customFolderPath = value;
+		});
 
-		const categoryList = [...this.settings.categories, "其他", CUSTOM_FOLDER_CATEGORY];
+		const categoryList = [...this.availableCategories, "其他", CUSTOM_FOLDER_CATEGORY];
 		const updateCustomFolderRow = () => {
 			customFolderRow.style.display = this.selectedCategory === CUSTOM_FOLDER_CATEGORY ? "flex" : "none";
 		};
@@ -127,11 +136,12 @@ export class ImportSourceModal extends Modal {
 			const useCustomFolder = this.selectedCategory === CUSTOM_FOLDER_CATEGORY;
 			let customFolderPath = "";
 			if (useCustomFolder) {
-				const normalizedPath = this.normalizeCustomFolderInput(this.customFolderPath);
+				const normalizedPath = this.normalizeCustomFolderInput(customFolderInput.value);
 				if (!normalizedPath) {
 					new Notice("请选择自定义文件夹路径。");
 					return;
 				}
+				this.customFolderPath = normalizedPath;
 				const vaultPath = normalizedPath === "/" ? "" : normalizedPath;
 				const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
 				if (abstractFile && !(abstractFile instanceof TFolder)) {

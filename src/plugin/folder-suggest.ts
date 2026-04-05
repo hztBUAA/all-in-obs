@@ -1,9 +1,12 @@
 import { AbstractInputSuggest, App } from "obsidian";
 
 export class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
-	constructor(app: App, textInputEl: HTMLInputElement) {
+	onSelectSuggestion?: (value: string) => void;
+
+	constructor(app: App, textInputEl: HTMLInputElement, onSelectSuggestion?: (value: string) => void) {
 		super(app, textInputEl);
 		this.limit = 200;
+		this.onSelectSuggestion = onSelectSuggestion;
 	}
 
 	getSuggestions(query: string): string[] {
@@ -21,6 +24,7 @@ export class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
 
 	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
 		this.setValue(value);
+		this.onSelectSuggestion?.(value);
 		this.close();
 	}
 }
