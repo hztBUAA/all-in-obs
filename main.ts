@@ -1191,7 +1191,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 	async getUniqueMediaFilename(folderPath: string, baseName: string, extension: string): Promise<string> {
 		let index = 0;
-		while (true) {
+		for (;;) {
 			const suffix = index === 0 ? "" : `-${index}`;
 			const filename = `${baseName}${suffix}${extension}`;
 			const filePath = `${folderPath}/${filename}`;
@@ -1366,7 +1366,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 	async getUniqueNotePath(folderPath: string, baseName: string): Promise<string> {
 		let index = 0;
-		while (true) {
+		for (;;) {
 			const suffix = index === 0 ? "" : `-${index}`;
 			const filePath = folderPath ? `${folderPath}/${baseName}${suffix}.md` : `${baseName}${suffix}.md`;
 			if (!(await this.app.vault.adapter.exists(filePath))) {
