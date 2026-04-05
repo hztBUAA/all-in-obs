@@ -1,14 +1,11 @@
 import {
-	AbstractInputSuggest,
-	App,
-	Modal,
 	Notice,
 	Plugin,
-	PluginSettingTab,
-	Setting,
-	TFolder,
 	requestUrl,
 } from "obsidian";
+import { ImportSourceModal } from "./src/plugin/import-modal";
+import { ImporterSettingTab } from "./src/plugin/settings-tab";
+import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
 import { buildSmokeSuiteReport } from "./src/plugin/smoke-report";
 import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
 import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
@@ -17,23 +14,6 @@ import { XhsResolver } from "./src/platforms/xhs/resolver";
 import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
 import { WechatArticleService } from "./src/platforms/wechat/article-service";
 import { buildWechatHeaders } from "./src/platforms/wechat/headers";
-
-interface ImporterSettings {
-	defaultFolder: string;
-	categories: string[];
-	lastCategory: string;
-	lastCustomFolder: string;
-	downloadMedia: boolean;
-	xhsDebugEnabled: boolean;
-}
-
-interface ImportInput {
-	text: string | null;
-	category: string;
-	downloadMedia: boolean;
-	useCustomFolder: boolean;
-	customFolderPath: string;
-}
 
 type SupportedPlatform = "wechat" | "xiaohongshu";
 
@@ -56,8 +36,6 @@ const DEFAULT_SETTINGS: ImporterSettings = {
 	xhsDebugEnabled: true,
 };
 
-const CUSTOM_FOLDER_CATEGORY = "自定义文件夹";
-
 interface XhsSmokeCaseResult {
 	name: string;
 	input: string;
@@ -76,31 +54,6 @@ interface ImportDestination {
 	folderPath: string;
 	useCustomFolder: boolean;
 	customFolderPath: string;
-}
-
-class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
-	constructor(app: App, textInputEl: HTMLInputElement) {
-		super(app, textInputEl);
-		this.limit = 200;
-	}
-
-	getSuggestions(query: string): string[] {
-		const keyword = query.trim().toLowerCase();
-		const folders = this.app.vault.getAllFolders(true).map((folder) => (folder.path ? folder.path : "/"));
-		if (!keyword) {
-			return folders;
-		}
-		return folders.filter((folder) => folder.toLowerCase().includes(keyword));
-	}
-
-	renderSuggestion(value: string, el: HTMLElement): void {
-		el.setText(value === "/" ? "/ (仓库根目录)" : value);
-	}
-
-	selectSuggestion(value: string, _evt: MouseEvent | KeyboardEvent): void {
-		this.setValue(value);
-		this.close();
-	}
 }
 
 export default class MultiSourceImporterPlugin extends Plugin {
@@ -976,290 +929,5 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			}
 			return named[token] ?? _all;
 		});
-	}
-
-}
-
-class ImporterSettingTab extends PluginSettingTab {
-	plugin: MultiSourceImporterPlugin;
-
-	constructor(app: App, plugin: MultiSourceImporterPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const { containerEl } = this;
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName("默认文件夹")
-			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
-			.addText((text) =>
-				text
-					.setPlaceholder("External Files")
-					.setValue(this.plugin.settings.defaultFolder)
-					.onChange(async (value) => {
-						this.plugin.settings.defaultFolder = this.plugin.normalizeVaultPath(value);
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("默认下载图片")
-			.setDesc("开启后导入时默认下载正文图片到本地 media 目录。")
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.downloadMedia).onChange(async (value) => {
-					this.plugin.settings.downloadMedia = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		new Setting(containerEl)
-			.setName("小红书调试日志")
-			.setDesc(`默认开启。日志路径：${this.plugin.getXhsDebugLogPath()}`)
-			.addToggle((toggle) =>
-				toggle.setValue(this.plugin.settings.xhsDebugEnabled).onChange(async (value) => {
-					this.plugin.settings.xhsDebugEnabled = value;
-					await this.plugin.saveSettings();
-				})
-			);
-
-		containerEl.createEl("p", {
-			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行小红书实网 Smoke 测试”生成）`,
-		});
-
-		new Setting(containerEl).setName("分类管理").setHeading();
-		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });
-
-		this.plugin.settings.categories.forEach((category, index) => {
-			const setting = new Setting(containerEl)
-				.setName(`分类 ${index + 1}`)
-				.addText((text) =>
-					text.setValue(category).onChange(async (value) => {
-						this.plugin.settings.categories[index] = value.trim() || "未命名分类";
-						await this.plugin.saveSettings();
-					})
-				);
-
-			setting.addButton((button) =>
-				button
-					.setIcon("arrow-up")
-					.setTooltip("上移")
-					.setDisabled(index === 0)
-					.onClick(async () => {
-						if (index > 0) {
-							[this.plugin.settings.categories[index - 1], this.plugin.settings.categories[index]] = [
-								this.plugin.settings.categories[index],
-								this.plugin.settings.categories[index - 1],
-							];
-							await this.plugin.saveSettings();
-							this.display();
-						}
-					})
-			);
-
-			setting.addButton((button) =>
-				button
-					.setIcon("arrow-down")
-					.setTooltip("下移")
-					.setDisabled(index === this.plugin.settings.categories.length - 1)
-					.onClick(async () => {
-						if (index < this.plugin.settings.categories.length - 1) {
-							[this.plugin.settings.categories[index], this.plugin.settings.categories[index + 1]] = [
-								this.plugin.settings.categories[index + 1],
-								this.plugin.settings.categories[index],
-							];
-							await this.plugin.saveSettings();
-							this.display();
-						}
-					})
-			);
-
-			setting.addButton((button) =>
-				button
-					.setButtonText("删除")
-					.onClick(async () => {
-						const removed = this.plugin.settings.categories[index];
-						this.plugin.settings.categories.splice(index, 1);
-						if (this.plugin.settings.lastCategory === removed) {
-							this.plugin.settings.lastCategory = "";
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			);
-		});
-
-		new Setting(containerEl).addButton((button) =>
-			button.setButtonText("新增分类").onClick(async () => {
-				this.plugin.settings.categories.push("新分类");
-				await this.plugin.saveSettings();
-				this.display();
-			})
-		);
-	}
-}
-
-class ImportSourceModal extends Modal {
-	result: ImportInput | null = null;
-	onSubmit: (result: ImportInput | null) => void;
-	settings: ImporterSettings;
-	selectedCategory: string;
-	downloadMedia: boolean;
-	customFolderPath: string;
-
-	constructor(app: App, settings: ImporterSettings, onSubmit: (result: ImportInput | null) => void) {
-		super(app);
-		this.settings = settings;
-		this.onSubmit = onSubmit;
-		this.selectedCategory = this.resolveInitialCategory();
-		this.downloadMedia = this.settings.downloadMedia;
-		this.customFolderPath = this.settings.lastCustomFolder || this.settings.defaultFolder || "";
-	}
-
-	resolveInitialCategory(): string {
-		if (this.settings.lastCategory === "其他") {
-			return "其他";
-		}
-		if (this.settings.lastCategory === CUSTOM_FOLDER_CATEGORY && this.settings.lastCustomFolder) {
-			return CUSTOM_FOLDER_CATEGORY;
-		}
-		if (this.settings.lastCategory && this.settings.categories.includes(this.settings.lastCategory)) {
-			return this.settings.lastCategory;
-		}
-		return this.settings.categories[0] || "其他";
-	}
-
-	normalizeCustomFolderInput(path: string): string | null {
-		const trimmed = path.trim();
-		if (!trimmed) {
-			return null;
-		}
-		const normalized = trimmed.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
-		if (/^\/+$/.test(normalized)) {
-			return "/";
-		}
-		const cleaned = normalized.replace(/^\/+|\/+$/g, "");
-		return cleaned || null;
-	}
-
-	onOpen() {
-		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.addClass("wca-modal-content");
-
-		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
-
-		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本（支持按行批量导入）：" });
-		const input = inputRow.createEl("textarea", {
-			cls: "wca-modal-textarea",
-			attr: {
-				placeholder: "例如：\\nhttps://mp.weixin.qq.com/s/xxxxxx\\nhttps://www.xiaohongshu.com/explore/xxxxxx",
-			},
-		});
-
-		const categoryRow = contentEl.createEl("div", { cls: "wca-modal-row" });
-		categoryRow.createEl("p", { text: "选择分类：" });
-		const chipContainer = categoryRow.createEl("div", { cls: "wca-chip-container" });
-		const customFolderRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-custom-folder-row"] });
-		customFolderRow.createEl("p", { text: "自定义文件夹：" });
-		const customFolderInput = customFolderRow.createEl("input", {
-			cls: "wca-custom-folder-input",
-			attr: {
-				type: "text",
-				placeholder: "例如：Projects/Clippings（输入 / 表示仓库根目录）",
-			},
-		});
-		customFolderInput.value = this.customFolderPath;
-		customFolderInput.addEventListener("input", () => {
-			this.customFolderPath = customFolderInput.value;
-		});
-		new VaultFolderPathSuggest(this.app, customFolderInput);
-
-		const categoryList = [...this.settings.categories, "其他", CUSTOM_FOLDER_CATEGORY];
-		const updateCustomFolderRow = () => {
-			customFolderRow.style.display = this.selectedCategory === CUSTOM_FOLDER_CATEGORY ? "flex" : "none";
-		};
-		const renderChips = () => {
-			chipContainer.empty();
-			categoryList.forEach((category) => {
-				const chip = chipContainer.createEl("button", {
-					text: category,
-					cls: "wca-chip",
-				});
-				if (category === this.selectedCategory) {
-					chip.addClass("wca-chip--selected");
-				}
-				chip.addEventListener("click", () => {
-					this.selectedCategory = category;
-					renderChips();
-					updateCustomFolderRow();
-				});
-			});
-		};
-		renderChips();
-		updateCustomFolderRow();
-
-		const downloadRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-download-row"] });
-		const downloadWrap = downloadRow.createEl("div", { cls: "wca-download-wrapper" });
-		const checkboxId = "wca-download-media-checkbox";
-		const checkbox = downloadWrap.createEl("input", { attr: { type: "checkbox", id: checkboxId } });
-		checkbox.checked = this.downloadMedia;
-		checkbox.addEventListener("change", () => {
-			this.downloadMedia = checkbox.checked;
-		});
-		downloadWrap.createEl("label", {
-			text: "本次导入下载图片到本地",
-			attr: { for: checkboxId },
-			cls: "wca-download-label",
-		});
-
-		const buttonRow = contentEl.createEl("div", { cls: ["wca-modal-row", "wca-button-row"] });
-		const importButton = buttonRow.createEl("button", {
-			text: "导入",
-			cls: "wca-submit-button",
-		});
-
-		const submit = () => {
-			const useCustomFolder = this.selectedCategory === CUSTOM_FOLDER_CATEGORY;
-			let customFolderPath = "";
-			if (useCustomFolder) {
-				const normalizedPath = this.normalizeCustomFolderInput(this.customFolderPath);
-				if (!normalizedPath) {
-					new Notice("请选择自定义文件夹路径。");
-					return;
-				}
-				const vaultPath = normalizedPath === "/" ? "" : normalizedPath;
-				const abstractFile = this.app.vault.getAbstractFileByPath(vaultPath);
-				if (abstractFile && !(abstractFile instanceof TFolder)) {
-					new Notice("该路径是文件，请改为文件夹路径。");
-					return;
-				}
-				customFolderPath = normalizedPath;
-			}
-
-			this.result = {
-				text: input.value.trim(),
-				category: this.selectedCategory,
-				downloadMedia: this.downloadMedia,
-				useCustomFolder,
-				customFolderPath,
-			};
-			this.close();
-		};
-
-		importButton.addEventListener("click", submit);
-		input.addEventListener("keypress", (event) => {
-			if (event.key === "Enter" && !event.shiftKey) {
-				event.preventDefault();
-				submit();
-			}
-		});
-	}
-
-	onClose() {
-		this.onSubmit(this.result);
 	}
 }

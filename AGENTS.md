@@ -38,6 +38,12 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 - `main.ts`
 - Plugin shell: commands, settings, orchestration.
 
+- `src/plugin`
+- `import-modal.ts`: import input UI.
+- `settings-tab.ts`: plugin settings UI.
+- `folder-suggest.ts`: folder path suggestions.
+- `types.ts`: plugin-level settings/input contracts.
+
 - `src/platforms/xhs`
 - `resolver.ts`: shortlink resolution (GET Location -> HEAD Location -> HTML extraction -> token rebuild).
 - `note-service.ts`: note HTML fetch, unavailable-page detection, structured extraction.
