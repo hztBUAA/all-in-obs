@@ -1,2 +1,18 @@
-export const PLATFORM_DEBUG_LOG_PATH = ".obsidian/plugins/multi-source-content-importer/debug.log";
-export const PLATFORM_SMOKE_REPORT_PATH = ".obsidian/plugins/multi-source-content-importer/smoke-report.json";
+const PLUGIN_SUBDIR = "plugins/multi-source-content-importer";
+
+function normalizeConfigDir(configDir: string): string {
+	return configDir.trim().replace(/^\/+|\/+$/g, "");
+}
+
+function getPluginDataDir(configDir: string): string {
+	const baseDir = normalizeConfigDir(configDir);
+	return baseDir ? `${baseDir}/${PLUGIN_SUBDIR}` : PLUGIN_SUBDIR;
+}
+
+export function getPlatformDebugLogPath(configDir: string): string {
+	return `${getPluginDataDir(configDir)}/debug.log`;
+}
+
+export function getPlatformSmokeReportPath(configDir: string): string {
+	return `${getPluginDataDir(configDir)}/smoke-report.json`;
+}

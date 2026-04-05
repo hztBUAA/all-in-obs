@@ -301,6 +301,12 @@ npx tsc --noEmit
 
 ## Changelog
 
+### 0.1.8
+
+- 接入 `eslint-plugin-obsidianmd`（Legacy `.eslintrc`）用于本地预检
+- 修复一批 ObsidianReviewBot 必改项：移除 `any`、去除不必要断言、避免内联样式写法、`configDir` 动态路径、`console` 规范化
+- 调整部分 UI 文案与设置项写法，减少 sentence-case / heading 规则误报
+
 ### 0.1.7
 
 - 修复设置页“分类管理”与导入弹窗分类来源不一致的问题

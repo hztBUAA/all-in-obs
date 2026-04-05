@@ -1,5 +1,5 @@
 import { App } from "obsidian";
-import { PLATFORM_DEBUG_LOG_PATH } from "./paths";
+import { getPlatformDebugLogPath } from "./paths";
 
 export interface PlatformDebugLoggerOptions {
 	app: App;
@@ -19,7 +19,7 @@ export class PlatformDebugLogger {
 	constructor(options: PlatformDebugLoggerOptions) {
 		this.app = options.app;
 		this.isEnabledFn = options.isEnabled;
-		this.logPath = options.logPath || PLATFORM_DEBUG_LOG_PATH;
+		this.logPath = options.logPath || getPlatformDebugLogPath(this.app.vault.configDir);
 		this.maxSize = options.maxSize ?? 180000;
 		this.truncateTo = options.truncateTo ?? 120000;
 	}
@@ -42,7 +42,7 @@ export class PlatformDebugLogger {
 		try {
 			return JSON.stringify(value).replace(/\s+/g, " ").slice(0, 280);
 		} catch (_error) {
-			return String(value);
+			return "[unserializable-value]";
 		}
 	}
 
@@ -72,7 +72,7 @@ export class PlatformDebugLogger {
 			([key, value]) => `${key}=${this.formatValue(value)}`
 		);
 		const line = `[${new Date().toISOString()}] ${stage}${lineParts.length > 0 ? ` | ${lineParts.join(" | ")}` : ""}\n`;
-		console.info(`[PLATFORM-DEBUG] ${line.trim()}`);
+		console.debug(`[PLATFORM-DEBUG] ${line.trim()}`);
 
 		try {
 			let existing = "";

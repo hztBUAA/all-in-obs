@@ -6,6 +6,17 @@ export interface XhsResolverOptions {
 	buildHeaders: () => Record<string, string>;
 }
 
+interface XhsResolverStateNote {
+	noteId?: string;
+	xsecToken?: string;
+}
+
+interface XhsResolverState {
+	note?: {
+		noteDetailMap?: Record<string, { note?: XhsResolverStateNote }>;
+	};
+}
+
 export class XhsResolver {
 	private readonly logger: PlatformDebugLogger;
 	private readonly buildHeaders: () => Record<string, string>;
@@ -297,7 +308,7 @@ export class XhsResolver {
 		return "";
 	}
 
-	parseXhsState(html: string): any | null {
+	parseXhsState(html: string): XhsResolverState | null {
 		const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)<\/script>/i);
 		if (!stateMatch?.[1]) {
 			return null;
@@ -311,7 +322,11 @@ export class XhsResolver {
 				jsonStr = jsonStr.slice(0, lastBrace + 1);
 			}
 			const cleanedJson = jsonStr.replace(/undefined/g, "null").replace(/\bNaN\b/g, "null");
-			return JSON.parse(cleanedJson);
+			const parsed: unknown = JSON.parse(cleanedJson);
+			if (!parsed || typeof parsed !== "object") {
+				return null;
+			}
+			return parsed as XhsResolverState;
 		} catch (_error) {
 			return null;
 		}

@@ -8,7 +8,7 @@ import { ImporterSettingTab } from "./src/plugin/settings-tab";
 import { TextPreviewModal } from "./src/plugin/text-preview-modal";
 import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
 import { runPlatformSmokeSuite, SmokeInputCase, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
-import { PLATFORM_SMOKE_REPORT_PATH } from "./src/shared/paths";
+import { getPlatformSmokeReportPath } from "./src/shared/paths";
 import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
 import { XhsResolver } from "./src/platforms/xhs/resolver";
 import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
@@ -72,7 +72,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 		this.addCommand({
 			id: "run-platform-smoke-tests",
-			name: "运行多平台实网 Smoke 测试",
+			name: "运行多平台实网 smoke 测试",
 			callback: async () => {
 				await this.runPlatformSmokeTests();
 			},
@@ -103,7 +103,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		if (typeof loadedSettings.debugEnabled !== "boolean" && typeof loadedSettings.xhsDebugEnabled === "boolean") {
 			this.settings.debugEnabled = !!loadedSettings.xhsDebugEnabled;
 		}
-		delete (this.settings as ImporterSettings).xhsDebugEnabled;
+		delete this.settings.xhsDebugEnabled;
 		this.settings.defaultFolder = this.normalizeVaultPath(this.settings.defaultFolder);
 		this.settings.lastCustomFolder = this.normalizeFolderDisplayPath(this.settings.lastCustomFolder);
 		this.settings.xhsSmokeCaseInputs = this.normalizeSmokeCaseInputs(
@@ -603,7 +603,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	getSmokeReportPath(): string {
-		return PLATFORM_SMOKE_REPORT_PATH;
+		return getPlatformSmokeReportPath(this.app.vault.configDir);
 	}
 
 	getSmokeCasesText(platform: SupportedSmokePlatform): string {
@@ -623,9 +623,9 @@ export default class MultiSourceImporterPlugin extends Plugin {
 
 	async openSmokeReportFile(): Promise<void> {
 		await this.showTextPreviewModal(
-			"Smoke 报告",
+			"smoke 报告",
 			this.getSmokeReportPath(),
-			`${JSON.stringify({ message: "Smoke report has not been generated yet." }, null, 2)}\n`
+			`${JSON.stringify({ message: "smoke report has not been generated yet." }, null, 2)}\n`
 		);
 	}
 
@@ -733,7 +733,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			xhsCases: this.buildSmokeInputCases("xiaohongshu"),
 			wechatCases: this.buildSmokeInputCases("wechat"),
 		});
-		new Notice(`平台 Smoke 测试完成：成功 ${result.successCount}，失败 ${result.failedCount}。报告：${result.reportPath}`);
+		new Notice(`平台 smoke 测试完成：成功 ${result.successCount}，失败 ${result.failedCount}。报告：${result.reportPath}`);
 	}
 
 	buildXhsFrontmatter(note: XhsNoteData, category: string, cover: string): string {

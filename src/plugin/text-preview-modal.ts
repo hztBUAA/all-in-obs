@@ -17,16 +17,13 @@ export class TextPreviewModal extends Modal {
 		titleEl.setText(this.titleText);
 		contentEl.empty();
 
-		contentEl.createEl("p", { text: `路径：${this.filePath}` });
+		contentEl.createEl("p", { text: `路径：${this.filePath}`, cls: "wca-text-preview-path" });
 		const textarea = contentEl.createEl("textarea", {
+			cls: "wca-text-preview-area",
 			attr: {
 				readonly: "true",
 			},
 		});
-		textarea.style.width = "100%";
-		textarea.style.minHeight = "420px";
-		textarea.style.fontFamily = "var(--font-monospace)";
-		textarea.style.fontSize = "12px";
 		textarea.value = this.content || "";
 	}
 }

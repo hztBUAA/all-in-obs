@@ -15,6 +15,34 @@ export interface XhsNoteServiceOptions {
 	buildHeaders: () => Record<string, string>;
 }
 
+interface XhsVideoStreamItem {
+	masterUrl?: string;
+}
+
+interface XhsImageItem {
+	urlDefault?: string;
+}
+
+interface XhsNoteObject {
+	type?: string;
+	desc?: string | string[];
+	imageList?: XhsImageItem[];
+	video?: {
+		media?: {
+			stream?: {
+				h264?: XhsVideoStreamItem[];
+				h265?: XhsVideoStreamItem[];
+			};
+		};
+	};
+}
+
+interface XhsState {
+	note?: {
+		noteDetailMap?: Record<string, { note?: XhsNoteObject }>;
+	};
+}
+
 export class XhsNoteService {
 	private readonly buildHeaders: () => Record<string, string>;
 
@@ -74,7 +102,7 @@ export class XhsNoteService {
 		};
 	}
 
-	private parseState(html: string): any | null {
+	private parseState(html: string): XhsState | null {
 		const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)<\/script>/i);
 		if (!stateMatch?.[1]) {
 			return null;
@@ -88,13 +116,17 @@ export class XhsNoteService {
 				jsonStr = jsonStr.slice(0, lastBrace + 1);
 			}
 			const cleanedJson = jsonStr.replace(/undefined/g, "null").replace(/\bNaN\b/g, "null");
-			return JSON.parse(cleanedJson);
+			const parsed: unknown = JSON.parse(cleanedJson);
+			if (!parsed || typeof parsed !== "object") {
+				return null;
+			}
+			return parsed as XhsState;
 		} catch (_error) {
 			return null;
 		}
 	}
 
-	private getNoteObject(state: any): any | null {
+	private getNoteObject(state: XhsState): XhsNoteObject | null {
 		try {
 			const map = state?.note?.noteDetailMap;
 			if (!map || typeof map !== "object") {
@@ -107,14 +139,14 @@ export class XhsNoteService {
 		}
 	}
 
-	private extractImages(note: any): string[] {
+	private extractImages(note: XhsNoteObject | null): string[] {
 		const list = Array.isArray(note?.imageList) ? note.imageList : [];
 		return list
-			.map((img: any) => this.normalizeMediaUrl(img?.urlDefault || ""))
+			.map((img) => this.normalizeMediaUrl(img?.urlDefault || ""))
 			.filter((url: string) => !!url);
 	}
 
-	private extractVideoUrl(note: any): string | null {
+	private extractVideoUrl(note: XhsNoteObject | null): string | null {
 		const stream = note?.video?.media?.stream;
 		const h264 = Array.isArray(stream?.h264) ? stream.h264 : [];
 		const h265 = Array.isArray(stream?.h265) ? stream.h265 : [];
@@ -123,7 +155,7 @@ export class XhsNoteService {
 		return normalized || null;
 	}
 
-	private extractContent(note: any, contentFromHtml: string): string {
+	private extractContent(note: XhsNoteObject | null, contentFromHtml: string): string {
 		const htmlText = contentFromHtml
 			.replace(/<[^>]+>/g, "")
 			.replace(/\[话题\]/g, "")

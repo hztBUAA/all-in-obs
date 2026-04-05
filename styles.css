@@ -5,6 +5,12 @@
 	padding: 10px;
 }
 
+.wca-modal-title {
+	margin: 0;
+	font-size: 1.4em;
+	font-weight: 600;
+}
+
 .wca-modal-row {
 	display: flex;
 	flex-direction: column;
@@ -119,4 +125,15 @@
 
 .wca-settings-subheading {
 	margin: 14px 0 6px 0;
+}
+
+.wca-text-preview-path {
+	word-break: break-all;
+}
+
+.wca-text-preview-area {
+	width: 100%;
+	min-height: 420px;
+	font-family: var(--font-monospace);
+	font-size: 12px;
 }

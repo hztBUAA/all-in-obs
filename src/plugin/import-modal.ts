@@ -57,7 +57,7 @@ export class ImportSourceModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass("wca-modal-content");
 
-		contentEl.createEl("h2", { text: "导入文章（微信 / 小红书）" });
+		contentEl.createEl("p", { text: "导入文章（微信 / 小红书）", cls: "wca-modal-title" });
 
 		const inputRow = contentEl.createEl("div", { cls: "wca-modal-row" });
 		inputRow.createEl("p", { text: "粘贴微信或小红书链接 / 分享文本（支持按行批量导入）：" });
@@ -77,7 +77,7 @@ export class ImportSourceModal extends Modal {
 			cls: "wca-custom-folder-input",
 			attr: {
 				type: "text",
-				placeholder: "例如：Projects/Clippings（输入 / 表示仓库根目录）",
+				placeholder: "例如：projects/clippings（输入 / 表示仓库根目录）",
 			},
 		});
 		customFolderInput.value = this.customFolderPath;
