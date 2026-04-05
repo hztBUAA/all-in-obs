@@ -17,8 +17,6 @@ main.js
 
 # obsidian
 data.json
-xhs-debug.log
-xhs-smoke-report.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
