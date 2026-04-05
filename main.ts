@@ -10,8 +10,13 @@ import {
 	requestUrl,
 } from "obsidian";
 import TurndownService from "turndown";
-import * as http from "http";
-import * as https from "https";
+import { buildSmokeSuiteReport } from "./src/plugin/smoke-report";
+import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
+import { XhsNoteData, XhsNoteService } from "./src/platforms/xhs/note-service";
+import { XhsDebugLogger } from "./src/platforms/xhs/debug-logger";
+import { XhsResolver } from "./src/platforms/xhs/resolver";
+import { XHS_SMOKE_CASES } from "./src/platforms/xhs/smoke-cases";
+import { buildWechatHeaders, isWechatVerificationPage } from "./src/platforms/wechat/headers";
 
 interface ImporterSettings {
 	defaultFolder: string;
@@ -19,6 +24,7 @@ interface ImporterSettings {
 	lastCategory: string;
 	lastCustomFolder: string;
 	downloadMedia: boolean;
+	xhsDebugEnabled: boolean;
 }
 
 interface ImportInput {
@@ -58,27 +64,29 @@ interface WechatArticleData {
 	images: string[];
 }
 
-interface XhsNoteData {
-	title: string;
-	source: string;
-	content: string;
-	images: string[];
-	videoUrl: string | null;
-	isVideo: boolean;
-	tags: string[];
-	cover: string;
-}
-
 const DEFAULT_SETTINGS: ImporterSettings = {
 	defaultFolder: "External Files",
 	categories: ["科技", "商业", "产品", "投资", "研究"],
 	lastCategory: "",
 	lastCustomFolder: "",
 	downloadMedia: true,
+	xhsDebugEnabled: true,
 };
 
-const WECHAT_REFERER = "https://mp.weixin.qq.com/";
 const CUSTOM_FOLDER_CATEGORY = "自定义文件夹";
+
+interface XhsSmokeCaseResult {
+	name: string;
+	input: string;
+	extractedUrl: string;
+	resolvedUrl: string;
+	hasXsecToken: boolean;
+	unavailablePage: boolean;
+	title: string;
+	isVideo: boolean;
+	status: "success" | "failed";
+	error: string;
+}
 
 interface ImportDestination {
 	categoryName: string;
@@ -114,9 +122,13 @@ class VaultFolderPathSuggest extends AbstractInputSuggest<string> {
 
 export default class MultiSourceImporterPlugin extends Plugin {
 	settings: ImporterSettings;
+	xhsDebugLogger: XhsDebugLogger;
+	xhsResolver: XhsResolver;
+	xhsNoteService: XhsNoteService;
 
 	async onload() {
 		await this.loadSettings();
+		this.initializeServices();
 
 		this.addRibbonIcon("book", "导入文章（微信 / 小红书）", async () => {
 			await this.handleImportAction();
@@ -130,7 +142,29 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "run-xhs-smoke-tests",
+			name: "运行小红书实网 Smoke 测试",
+			callback: async () => {
+				await this.runXhsSmokeTests();
+			},
+		});
+
 		this.addSettingTab(new ImporterSettingTab(this.app, this));
+	}
+
+	initializeServices() {
+		this.xhsDebugLogger = new XhsDebugLogger({
+			app: this.app,
+			isEnabled: () => this.settings.xhsDebugEnabled,
+		});
+		this.xhsResolver = new XhsResolver({
+			logger: this.xhsDebugLogger,
+			buildHeaders: () => this.buildXiaohongshuHeaders(),
+		});
+		this.xhsNoteService = new XhsNoteService({
+			buildHeaders: () => this.buildXiaohongshuHeaders(),
+		});
 	}
 
 	async loadSettings() {
@@ -353,26 +387,6 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		return null;
 	}
 
-	normalizeXiaohongshuUrl(url: string): string {
-		const normalized = this.normalizeArticleUrl(url);
-		try {
-			const parsed = new URL(normalized);
-			if (!/xiaohongshu\.com$/i.test(parsed.hostname)) {
-				return normalized;
-			}
-
-			const match = parsed.pathname.match(/\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/i);
-			if (!match?.[1]) {
-				const normalizedPath = parsed.pathname.replace("/explore/", "/discovery/item/");
-				return `${parsed.origin}${normalizedPath}${parsed.search}`;
-			}
-
-			return `https://www.xiaohongshu.com/discovery/item/${match[1]}${parsed.search}`;
-		} catch (_error) {
-			return normalized.replace("/explore/", "/discovery/item/");
-		}
-	}
-
 	normalizeArticleUrl(url: string): string {
 		let normalized = url.trim().replace(/&amp;/g, "&");
 		normalized = normalized.replace(/[。！!）)\]】>,，,]+$/, "");
@@ -381,21 +395,11 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	buildWechatHeaders(articleUrl: string): Record<string, string> {
-		return {
-			"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-			"Referer": WECHAT_REFERER,
-			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-			"Cache-Control": "no-cache",
-			"Sec-Fetch-Site": "none",
-			"Sec-Fetch-Mode": "navigate",
-			"Sec-Fetch-Dest": "document",
-			"X-Requested-With": "XMLHttpRequest",
-			"X-Source-URL": articleUrl,
-		};
+		return buildWechatHeaders(articleUrl);
 	}
 
 	isVerificationPage(html: string): boolean {
-		return /环境异常|去验证|secitptpage\/template\/verify|TCaptcha|wappoc_appmsgcaptcha/i.test(html);
+		return isWechatVerificationPage(html);
 	}
 
 	async importWechatArticle(
@@ -508,7 +512,10 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		silent = false
 	): Promise<boolean> {
 		try {
+			await this.xhsDebugLogger.reset(url);
+			await this.xhsDebugLogger.append("import-start", { inputUrl: url });
 			const resolvedUrl = await this.resolveXiaohongshuUrl(url);
+			await this.xhsDebugLogger.append("import-resolved-url", { resolvedUrl });
 			const html = await this.fetchXiaohongshuHtml(resolvedUrl);
 			const note = this.extractXhsNoteData(resolvedUrl, html);
 			const cleanContent = note.content.trim();
@@ -599,6 +606,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return true;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			await this.xhsDebugLogger.append("import-error", { message });
 			console.error("Failed to import Xiaohongshu note:", error);
 			if (!silent) {
 				new Notice(`导入失败：${message}`);
@@ -608,241 +616,109 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	async fetchXiaohongshuHtml(url: string): Promise<string> {
-		const response = await requestUrl({
-			url,
-			method: "GET",
-			headers: this.buildXiaohongshuHeaders(),
-			throw: false,
-		});
-
-		if (response.status >= 400) {
-			throw new Error(`请求失败（HTTP ${response.status}）`);
-		}
-
-		if (this.isXhsUnavailablePage(response.text)) {
-			throw new Error("小红书笔记不可访问，可能已删除、无权限访问，或需要保留分享链接中的 xsec_token 参数。");
-		}
-
-		return response.text;
+		return this.xhsNoteService.fetchHtml(url);
 	}
 
 	async resolveXiaohongshuUrl(url: string): Promise<string> {
-		const normalized = this.normalizeArticleUrl(url);
-		if (!/xhslink\.com/i.test(normalized)) {
-			return this.normalizeXiaohongshuUrl(normalized);
-		}
-
-		try {
-			const response = await requestUrl({
-				url: normalized,
-				method: "GET",
-				headers: this.buildXiaohongshuHeaders(),
-				throw: false,
-			});
-
-			const location = response.headers.location || response.headers.Location;
-			if (location) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
-			}
-
-			const match = response.text.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			if (match?.[0]) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0]));
-			}
-		} catch (_error) {
-			// Fall through to fetch() fallback below when Electron's network stack blocks the short link.
-		}
-
-		const fallback = await this.resolveXiaohongshuUrlWithFetch(normalized);
-		if (fallback) {
-			return fallback;
-		}
-
-		const nodeFallback = await this.resolveXiaohongshuUrlWithNode(normalized);
-		if (nodeFallback) {
-			return nodeFallback;
-		}
-
-		throw new Error("小红书短链解析失败，请改用帖子详情页链接重试。");
+		return this.xhsResolver.resolve(url);
 	}
 
-	async resolveXiaohongshuUrlWithFetch(url: string): Promise<string | null> {
-		try {
-			const response = await fetch(url, {
-				method: "GET",
-				headers: this.buildXiaohongshuHeaders(),
-				redirect: "manual",
-			});
-			const location = response.headers.get("location");
-			if (location) {
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(location));
-			}
-
-			const html = await response.text();
-			const match = html.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
-		} catch (_error) {
-			return null;
-		}
+	getXhsDebugLogPath(): string {
+		return this.xhsDebugLogger.getLogPath();
 	}
 
-	async resolveXiaohongshuUrlWithNode(url: string, redirects = 0): Promise<string | null> {
-		if (redirects > 5) {
-			return null;
-		}
+	getXhsSmokeReportPath(): string {
+		return XHS_SMOKE_REPORT_PATH;
+	}
 
-		try {
-			const parsed = new URL(url);
-			const client = parsed.protocol === "http:" ? http : https;
+	async runXhsSmokeTests(): Promise<void> {
+		const startedAt = new Date().toISOString();
+		await this.xhsDebugLogger.reset("SMOKE_SUITE");
+		await this.xhsDebugLogger.append("smoke-suite-start", { caseCount: XHS_SMOKE_CASES.length });
 
-			const response = await new Promise<{ statusCode: number; headers: Record<string, string | string[] | undefined>; body: string }>(
-				(resolve, reject) => {
-					const request = client.request(
-						url,
-						{
-							method: "GET",
-							headers: this.buildXiaohongshuHeaders(),
-						},
-						(res) => {
-							const chunks: Buffer[] = [];
-							res.on("data", (chunk) => {
-								chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-							});
-							res.on("end", () => {
-								resolve({
-									statusCode: res.statusCode ?? 0,
-									headers: res.headers,
-									body: Buffer.concat(chunks).toString("utf8"),
-								});
-							});
-						}
-					);
-
-					request.on("error", reject);
-					request.end();
-				}
-			);
-
-			const locationHeader = response.headers.location;
-			const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
-			if (location) {
-				const nextUrl = new URL(location, url).toString();
-				if (/xhslink\.com/i.test(nextUrl)) {
-					return this.resolveXiaohongshuUrlWithNode(nextUrl, redirects + 1);
-				}
-				return this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(nextUrl));
+		const results: XhsSmokeCaseResult[] = [];
+		for (const testCase of XHS_SMOKE_CASES) {
+			const extracted = this.extractXiaohongshuUrl(testCase.input) || "";
+			if (!extracted) {
+				results.push({
+					name: testCase.name,
+					input: testCase.input,
+					extractedUrl: "",
+					resolvedUrl: "",
+					hasXsecToken: false,
+					unavailablePage: false,
+					title: "",
+					isVideo: false,
+					status: "failed",
+					error: "未能从输入文本识别出小红书链接",
+				});
+				continue;
 			}
 
-			const match = response.body.match(
-				/https?:\/\/www\.xiaohongshu\.com\/(?:discovery\/item|explore)\/[a-zA-Z0-9]+(?:\?[^"'<>\\s]*)?/i
-			);
-			return match?.[0] ? this.normalizeXiaohongshuUrl(this.decodeHtmlEntities(match[0])) : null;
-		} catch (_error) {
-			return null;
+			await this.xhsDebugLogger.append("smoke-case-start", { name: testCase.name, extractedUrl: extracted });
+			let resolvedUrl = "";
+			let hasXsecToken = false;
+			try {
+				resolvedUrl = await this.resolveXiaohongshuUrl(extracted);
+				hasXsecToken = /[?&]xsec_token=/i.test(resolvedUrl);
+				const html = await this.fetchXiaohongshuHtml(resolvedUrl);
+				const note = this.extractXhsNoteData(resolvedUrl, html);
+				const unavailable = this.isXhsUnavailablePage(html);
+				results.push({
+					name: testCase.name,
+					input: testCase.input,
+					extractedUrl: extracted,
+					resolvedUrl,
+					hasXsecToken,
+					unavailablePage: unavailable,
+					title: note.title,
+					isVideo: note.isVideo,
+					status: "success",
+					error: "",
+				});
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				results.push({
+					name: testCase.name,
+					input: testCase.input,
+					extractedUrl: extracted,
+					resolvedUrl,
+					hasXsecToken,
+					unavailablePage: /不可访问|unavailable/i.test(message),
+					title: "",
+					isVideo: false,
+					status: "failed",
+					error: message,
+				});
+			}
 		}
+
+		const successCount = results.filter((item) => item.status === "success").length;
+		const failedCount = results.length - successCount;
+		const report = buildSmokeSuiteReport(
+			this.manifest.version,
+			startedAt,
+			results,
+			successCount,
+			failedCount
+		);
+
+		const reportPath = this.getXhsSmokeReportPath();
+		await this.app.vault.adapter.write(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+		await this.xhsDebugLogger.append("smoke-suite-finished", {
+			successCount,
+			failedCount,
+			reportPath,
+		});
+		new Notice(`XHS Smoke 测试完成：成功 ${successCount}，失败 ${failedCount}。报告：${reportPath}`);
 	}
 
 	isXhsUnavailablePage(html: string): boolean {
-		return /<title>\s*小红书\s*-\s*你访问的页面不见了\s*<\/title>/i.test(html);
+		return this.xhsNoteService.isUnavailablePage(html);
 	}
 
 	extractXhsNoteData(sourceUrl: string, html: string): XhsNoteData {
-		const titleMatch = html.match(/<title>(.*?)<\/title>/);
-		const title = titleMatch?.[1]?.replace(" - 小红书", "").trim() || "Untitled Xiaohongshu Note";
-		const state = this.parseXhsState(html);
-		const note = state ? this.getXhsNoteObject(state) : null;
-
-		const images = this.extractXhsImages(note);
-		const videoUrl = this.extractXhsVideoUrl(note);
-		const isVideo = note?.type === "video";
-
-		const contentFromHtml = html.match(/<div id="detail-desc" class="desc">([\s\S]*?)<\/div>/)?.[1] || "";
-		const content = this.extractXhsContent(note, contentFromHtml);
-		const tags = this.extractXhsTags(content);
-		const normalizedContent = content
-			.replace(/#[^#\s]*(?:\s+#[^#\s]*)*\s*/g, "")
-			.trim();
-
-		return {
-			title,
-			source: sourceUrl,
-			content: normalizedContent,
-			images,
-			videoUrl,
-			isVideo,
-			tags,
-			cover: images[0] || "",
-		};
-	}
-
-	parseXhsState(html: string): any | null {
-		const stateMatch = html.match(/window\.__INITIAL_STATE__=(.*?)<\/script>/s);
-		if (!stateMatch?.[1]) {
-			return null;
-		}
-
-		try {
-			const jsonStr = stateMatch[1].trim();
-			const cleanedJson = jsonStr.replace(/undefined/g, "null");
-			return JSON.parse(cleanedJson);
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	getXhsNoteObject(state: any): any | null {
-		try {
-			const map = state?.note?.noteDetailMap;
-			if (!map || typeof map !== "object") {
-				return null;
-			}
-			const noteId = Object.keys(map)[0];
-			return map[noteId]?.note ?? null;
-		} catch (_error) {
-			return null;
-		}
-	}
-
-	extractXhsImages(note: any): string[] {
-		const list = Array.isArray(note?.imageList) ? note.imageList : [];
-		return list
-			.map((img: any) => this.normalizeMediaUrl(img?.urlDefault || ""))
-			.filter((url: string) => !!url);
-	}
-
-	extractXhsVideoUrl(note: any): string | null {
-		const stream = note?.video?.media?.stream;
-		const h264 = Array.isArray(stream?.h264) ? stream.h264 : [];
-		const h265 = Array.isArray(stream?.h265) ? stream.h265 : [];
-		const picked = h264[0]?.masterUrl || h265[0]?.masterUrl || "";
-		const normalized = this.normalizeMediaUrl(picked);
-		return normalized || null;
-	}
-
-	extractXhsContent(note: any, contentFromHtml: string): string {
-		const htmlText = contentFromHtml
-			.replace(/<[^>]+>/g, "")
-			.replace(/\[话题\]/g, "")
-			.replace(/\[[^\]]+\]/g, "")
-			.trim();
-		if (htmlText) {
-			return htmlText;
-		}
-
-		const desc = (note?.desc || "")
-			.replace(/\[话题\]/g, "")
-			.replace(/\[[^\]]+\]/g, "")
-			.trim();
-		return desc;
-	}
-
-	extractXhsTags(content: string): string[] {
-		const matches = content.match(/#\S+/g) || [];
-		return matches.map((tag) => tag.replace(/^#/, "").trim()).filter((tag) => !!tag);
+		return this.xhsNoteService.extractNoteData(sourceUrl, html);
 	}
 
 	buildXhsFrontmatter(note: XhsNoteData, category: string, cover: string): string {
@@ -1042,7 +918,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 
 		try {
-			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
+			const doc = new DOMParser().parseFromString(`<div id="wechat-root">${contentHtml}</div>`, "text/html");
 			const root = doc.querySelector("#wechat-root");
 			if (!root) {
 				return contentHtml;
@@ -1079,7 +955,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 
 		try {
-			const doc = new DOMParser().parseFromString(`<div id=\"wechat-root\">${contentHtml}</div>`, "text/html");
+			const doc = new DOMParser().parseFromString(`<div id="wechat-root">${contentHtml}</div>`, "text/html");
 			doc.querySelectorAll("img").forEach((img) => {
 				const rawUrl = img.getAttribute("data-src") || img.getAttribute("src") || "";
 				const normalized = this.normalizeMediaUrl(rawUrl);
@@ -1118,10 +994,10 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			return imageMap.get(normalized) ?? normalized;
 		};
 
-		turndown.addRule("wechatImage", {
-			filter: "img",
-			replacement: (_content, node) => {
-				const el = node as HTMLElement;
+			turndown.addRule("wechatImage", {
+				filter: "img",
+				replacement: (_content: string, node: Node) => {
+					const el = node as HTMLElement;
 				const rawUrl = el.getAttribute("data-src") || el.getAttribute("src") || "";
 				const finalUrl = resolveImage(rawUrl);
 				if (!finalUrl) {
@@ -1548,6 +1424,20 @@ class ImporterSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 			);
+
+		new Setting(containerEl)
+			.setName("小红书调试日志")
+			.setDesc(`默认开启。日志路径：${this.plugin.getXhsDebugLogPath()}`)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.xhsDebugEnabled).onChange(async (value) => {
+					this.plugin.settings.xhsDebugEnabled = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		containerEl.createEl("p", {
+			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行小红书实网 Smoke 测试”生成）`,
+		});
 
 		new Setting(containerEl).setName("分类管理").setHeading();
 		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });

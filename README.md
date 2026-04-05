@@ -59,6 +59,7 @@
 - `categories`：分类列表，可在设置页维护
 - `lastCategory`：记忆最近一次选择
 - `downloadMedia`：默认是否下载媒体
+- `xhsDebugEnabled`：是否写入小红书调试日志（默认开启）
 
 ### Frontmatter 字段
 
@@ -153,6 +154,13 @@ ln -s "$(pwd)" "<你的Vault>/.obsidian/plugins/multi-source-content-importer"
 3. 选择分类
 4. 按需勾选“下载图片到本地”
 5. 点击导入
+
+#### 小红书排障与 Smoke
+
+- 命令面板可执行 `运行小红书实网 Smoke 测试`
+- 报告输出：`.obsidian/plugins/multi-source-content-importer/xhs-smoke-report.json`
+- 调试日志：`.obsidian/plugins/multi-source-content-importer/xhs-debug.log`
+- 设置页可关闭 `xhsDebugEnabled`
 
 #### 常见安装问题
 
