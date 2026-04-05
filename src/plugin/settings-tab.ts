@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import { ImporterSettings } from "./types";
 
 export interface ImporterSettingsTabHost {
@@ -28,6 +28,8 @@ export class ImporterSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		new Setting(containerEl).setName("基础设置").setHeading();
+
 		new Setting(containerEl)
 			.setName("默认文件夹")
 			.setDesc("笔记保存根目录，分类会在此目录下创建子目录。")
@@ -51,6 +53,9 @@ export class ImporterSettingTab extends PluginSettingTab {
 				})
 			);
 
+		containerEl.createEl("hr");
+		new Setting(containerEl).setName("调试与报告").setHeading();
+
 		new Setting(containerEl)
 			.setName("小红书调试日志")
 			.setDesc(`默认开启。日志路径：${this.plugin.getXhsDebugLogPath()}`)
@@ -61,41 +66,44 @@ export class ImporterSettingTab extends PluginSettingTab {
 				})
 			);
 
-		containerEl.createEl("p", {
-			text: `实网 Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}（可通过命令面板“运行多平台实网 Smoke 测试”生成）`,
-		});
+		containerEl.createEl("p", { text: `Smoke 报告路径：${this.plugin.getXhsSmokeReportPath()}` });
+		containerEl.createEl("p", { text: `XHS 调试日志路径：${this.plugin.getXhsDebugLogPath()}` });
 
+		containerEl.createEl("hr");
 		new Setting(containerEl).setName("Smoke 测试").setHeading();
 		containerEl.createEl("p", { text: "可直接在设置页运行测试、查看报告，并自定义各平台测试用例（每行一条）。" });
 
 		new Setting(containerEl)
-			.setName("运行与查看")
+			.setName("运行测试")
 			.addButton((button) =>
 				button
 					.setButtonText("运行多平台 Smoke")
 					.onClick(async () => {
-						await this.plugin.runPlatformSmokeTests();
+						await this.runSafe(async () => this.plugin.runPlatformSmokeTests());
 					})
 			)
 			.addButton((button) =>
 				button
 					.setButtonText("仅运行小红书")
 					.onClick(async () => {
-						await this.plugin.runXhsSmokeTests();
+						await this.runSafe(async () => this.plugin.runXhsSmokeTests());
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("查看结果")
+			.addButton((button) =>
+				button
+					.setButtonText("查看报告")
+					.onClick(async () => {
+						await this.runSafe(async () => this.plugin.openSmokeReportFile());
 					})
 			)
 			.addButton((button) =>
 				button
-					.setButtonText("打开报告")
+					.setButtonText("查看调试日志")
 					.onClick(async () => {
-						await this.plugin.openSmokeReportFile();
-					})
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("打开调试日志")
-					.onClick(async () => {
-						await this.plugin.openXhsDebugLogFile();
+						await this.runSafe(async () => this.plugin.openXhsDebugLogFile());
 					})
 			);
 
@@ -108,9 +116,14 @@ export class ImporterSettingTab extends PluginSettingTab {
 				button
 					.setButtonText("刷新报告摘要")
 					.onClick(async () => {
-						smokeSummaryEl.setText(await this.plugin.readSmokeReportSummary());
+						await this.runSafe(async () => {
+							smokeSummaryEl.setText(await this.plugin.readSmokeReportSummary());
+						});
 					})
 			);
+
+		containerEl.createEl("hr");
+		new Setting(containerEl).setName("Smoke 用例配置").setHeading();
 
 		new Setting(containerEl)
 			.setName("小红书 Smoke 用例")
@@ -136,6 +149,7 @@ export class ImporterSettingTab extends PluginSettingTab {
 				});
 			});
 
+		containerEl.createEl("hr");
 		new Setting(containerEl).setName("分类管理").setHeading();
 		containerEl.createEl("p", { text: "可编辑分类名称、调整顺序或删除分类；导入弹窗中固定包含“其他”和“自定义文件夹”。" });
 
@@ -205,5 +219,14 @@ export class ImporterSettingTab extends PluginSettingTab {
 				this.display();
 			})
 		);
+	}
+
+	async runSafe(task: () => Promise<void>): Promise<void> {
+		try {
+			await task();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(`操作失败：${message}`);
+		}
 	}
 }

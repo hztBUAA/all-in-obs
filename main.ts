@@ -1,11 +1,11 @@
 import {
 	Notice,
 	Plugin,
-	TFile,
 	requestUrl,
 } from "obsidian";
 import { ImportSourceModal } from "./src/plugin/import-modal";
 import { ImporterSettingTab } from "./src/plugin/settings-tab";
+import { TextPreviewModal } from "./src/plugin/text-preview-modal";
 import { CUSTOM_FOLDER_CATEGORY, ImportInput, ImporterSettings } from "./src/plugin/types";
 import { runPlatformSmokeSuite, SmokeInputCase, SupportedSmokePlatform } from "./src/plugin/platform-smoke";
 import { XHS_SMOKE_REPORT_PATH } from "./src/shared/paths";
@@ -567,14 +567,15 @@ export default class MultiSourceImporterPlugin extends Plugin {
 	}
 
 	async openSmokeReportFile(): Promise<void> {
-		await this.openOrCreateTextFile(
+		await this.showTextPreviewModal(
+			"Smoke 报告",
 			this.getXhsSmokeReportPath(),
 			`${JSON.stringify({ message: "Smoke report has not been generated yet." }, null, 2)}\n`
 		);
 	}
 
 	async openXhsDebugLogFile(): Promise<void> {
-		await this.openOrCreateTextFile(this.getXhsDebugLogPath(), "");
+		await this.showTextPreviewModal("XHS 调试日志", this.getXhsDebugLogPath(), "");
 	}
 
 	async readSmokeReportSummary(): Promise<string> {
@@ -629,7 +630,7 @@ export default class MultiSourceImporterPlugin extends Plugin {
 		}
 	}
 
-	async openOrCreateTextFile(path: string, defaultContent: string): Promise<void> {
+	async showTextPreviewModal(title: string, path: string, defaultContent: string): Promise<void> {
 		const normalizedPath = path.trim().replace(/^\/+/, "");
 		if (!normalizedPath) {
 			new Notice("文件路径无效。");
@@ -641,16 +642,12 @@ export default class MultiSourceImporterPlugin extends Plugin {
 			await this.ensureFolder(folderPath);
 		}
 
-		let abstract = this.app.vault.getAbstractFileByPath(normalizedPath);
-		if (!abstract) {
-			abstract = await this.app.vault.create(normalizedPath, defaultContent);
-		}
-		if (!(abstract instanceof TFile)) {
-			new Notice(`路径不是文件：${normalizedPath}`);
-			return;
+		if (!(await this.app.vault.adapter.exists(normalizedPath))) {
+			await this.app.vault.adapter.write(normalizedPath, defaultContent);
 		}
 
-		await this.app.workspace.getLeaf(true).openFile(abstract);
+		const content = await this.app.vault.adapter.read(normalizedPath);
+		new TextPreviewModal(this.app, title, normalizedPath, content).open();
 	}
 
 	buildSmokeInputCases(platform: SupportedSmokePlatform): SmokeInputCase[] {
