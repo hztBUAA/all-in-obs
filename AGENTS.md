@@ -45,7 +45,8 @@ This repository uses a reproducible fix loop for Xiaohongshu and WeChat import i
 - `smoke-cases.ts`: shared real-world smoke case set.
 
 - `src/platforms/wechat`
-- Platform-specific HTTP headers and verification page detection.
+- `article-service.ts`: fetch, parse, markdown conversion, and frontmatter for WeChat.
+- `headers.ts`: platform-specific HTTP headers and verification page detection.
 
 - `src/shared`
 - Shared constants and cross-platform helper values.
