@@ -287,7 +287,10 @@ async function importXiaohongshuNote(url, outputDir, category, downloadMedia) {
 		headers,
 	});
 
-	const finalImages = note.images.map((img) => imageMap.get(img) ?? img);
+	const finalImages = note.images.map((img) => {
+		const normalized = normalizeMediaUrl(img);
+		return imageMap.get(normalized) ?? imageMap.get(img) ?? normalized ?? img;
+	});
 	const normalizedCover = normalizeMediaUrl(note.cover);
 	const finalCover = normalizedCover ? imageMap.get(normalizedCover) ?? normalizedCover : "";
 
