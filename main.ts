@@ -525,7 +525,10 @@ export default class MultiSourceImporterPlugin extends Plugin {
 				headers,
 			});
 
-			const finalImages = note.images.map((img) => imageMap.get(img) ?? img);
+			const finalImages = note.images.map((img) => {
+				const normalized = this.normalizeMediaUrl(img);
+				return imageMap.get(normalized) ?? imageMap.get(img) ?? normalized ?? img;
+			});
 			const normalizedCover = this.normalizeMediaUrl(note.cover);
 			const finalCover = normalizedCover ? (imageMap.get(normalizedCover) ?? normalizedCover) : "";
 
